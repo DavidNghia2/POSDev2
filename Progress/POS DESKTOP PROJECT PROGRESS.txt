@@ -1,0 +1,252 @@
+POS DESKTOP PROJECT PROGRESS
+Last Updated: 2026-05-07
+
+1. Current Status
+- The project is a desktop POS application built with Python + PyQt6.
+- The app now uses a single main window with QStackedWidget.
+- The left sidebar switches between POS Terminal and Product Management.
+- No separate Product Management window/dialog is opened anymore.
+- SQLite is used through Python's built-in sqlite3 module.
+- The main database file is pos.db in the project root.
+- POS Terminal and Product Management share the same pos.db database.
+- Product Management manages the products table.
+- POS Terminal reads products for sales and stores transactions in sales and sale_items.
+- Cash, Split Payment, and Void/Cancel backend logic are implemented.
+- Successful payments show a Receipt Preview popup that simulates printing a supermarket receipt.
+
+2. Main Files
+- main.py
+  Main entry point. Creates QApplication, applies app style/font, and launches PosMainWindow.
+
+- pos_terminal.py
+  Compatibility wrapper. Imports main() from main.py.
+
+- requirements.txt
+  Current dependency: PyQt6==6.7.1.
+
+- setup.ps1
+  PowerShell setup script for virtual environment and dependencies.
+
+- README_SETUP.md
+  Setup and run guide.
+
+- pos.db
+  Runtime SQLite database shared by all modules.
+
+- database/db.py
+  Shared database helper. SQL and database write/read helpers should live here.
+
+- pos_terminal/pos_window.py
+  Main POS window. Contains sidebar, QStackedWidget, POS Terminal page, cart logic, payment logic, and receipt preview.
+
+- product_management/product_management_window.py
+  Product Management page. Handles product CRUD and product search UI.
+
+- Progress/tiến độ.txt
+  Vietnamese project progress file.
+
+- Progress/POS DESKTOP PROJECT PROGRESS.txt
+  English project progress file.
+
+3. UI Flow
+- main.py launches PosMainWindow.
+- PosMainWindow is the only main app window.
+- The left sidebar contains:
+  + POS Terminal
+  + Product Management
+- QStackedWidget changes the right-side content when a sidebar item is clicked.
+- Product Management is a QWidget page inside the stack, not a separate QDialog.
+
+4. Database Schema
+- database/db.py creates required tables through init_db().
+
+products:
+CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    barcode TEXT UNIQUE,
+    name TEXT NOT NULL,
+    price REAL NOT NULL,
+    category TEXT,
+    requires_weight BOOLEAN DEFAULT 0
+)
+
+sales:
+CREATE TABLE IF NOT EXISTS sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    total_amount REAL NOT NULL,
+    payment_method TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+
+sale_items:
+CREATE TABLE IF NOT EXISTS sale_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL,
+    barcode TEXT,
+    qty INTEGER NOT NULL,
+    price REAL NOT NULL,
+    subtotal REAL NOT NULL,
+    FOREIGN KEY (sale_id) REFERENCES sales (id)
+)
+
+5. Database Helper Functions
+- get_connection()
+  Opens the SQLite connection and returns sqlite3.Row results.
+
+- init_db()
+  Creates products, sales, and sale_items if missing.
+
+- get_all_products()
+  Returns all products.
+
+- search_products(keyword)
+  Searches products by name or barcode.
+
+- get_product_by_barcode(barcode)
+  Finds one product by barcode.
+
+- add_product(), update_product(), delete_product()
+  Product CRUD helpers.
+
+- find_product_for_sale(keyword)
+  Helper used by POS Terminal when scanning/searching.
+
+- create_sale(total_amount, payment_method, sale_items)
+  Saves a sale header into sales and item rows into sale_items.
+
+6. Product Management
+- File: product_management/product_management_window.py.
+- Product Management is a QWidget page inside the main QStackedWidget.
+- The form now uses QFormLayout for aligned input fields.
+- Real-time search uses textChanged.
+- Input fields:
+  + Barcode
+  + Product Name
+  + Price
+  + Category
+- Checkbox:
+  + Requires Weight
+- Buttons:
+  + Add Product
+  + Update Product
+  + Delete Product
+- Table columns:
+  + No.
+  + Barcode
+  + Product Name
+  + Price
+  + Category
+  + Requires Weight
+- No. is display-only sequence numbering, not the database id.
+- The real database id is stored in the No. cell UserRole for update/delete logic.
+- Product delete uses QMessageBox confirmation.
+- Validation exists for required product name, non-negative price, and unique barcode.
+
+7. POS Terminal
+- File: pos_terminal/pos_window.py.
+- The scan/search bar accepts barcode or product name, then Enter.
+- POS calls db.find_product_for_sale(keyword).
+- Single match:
+  + Adds the product to cart.
+  + If already present, increments Qty.
+  + Updates subtotal and Total Amount.
+- No match:
+  + Shows QMessageBox warning "Product Not Found".
+- Multiple matches:
+  + Shows QMessageBox warning asking for a more specific search.
+- Cart columns:
+  + Barcode
+  + Product Name
+  + Qty
+  + Unit Price
+  + Subtotal
+  + Action
+- Qty can be edited with double-click.
+- Qty set to 0 or negative removes the item from cart.
+- Action column contains a Delete button per row.
+
+8. Payment Logic
+- Pay Cash:
+  + Reads Total Amount from the cart.
+  + Reads Tendered from the QLineEdit.
+  + Shows a warning if Tendered < Total.
+  + Calculates Change when payment is enough.
+  + Saves sales with payment_method = Cash.
+  + Saves cart rows into sale_items.
+  + Shows "Payment successful" with Change.
+  + Shows Receipt Preview popup.
+  + Clears the cart for the next customer.
+
+- Split Payment:
+  + Opens a QDialog popup.
+  + Fields: Cash and Card/Transfer.
+  + Confirm button validates Cash + Card/Transfer >= Total.
+  + Saves sales with payment_method = Split.
+  + Saves cart rows into sale_items.
+  + Shows "Payment successful" with Change.
+  + Shows Receipt Preview popup.
+  + Closes the dialog and clears the cart.
+
+- Void/Cancel:
+  + Shows confirmation text:
+    "Are you sure you want to void this transaction?"
+  + Yes clears cart, resets Total Amount to $0.00, and clears Tendered.
+  + No does nothing.
+
+9. Receipt Preview
+- Successful Pay Cash and Split Payment generate a text receipt.
+- Receipt includes:
+  + Store name: MY POS SHOP
+  + Payment date/time
+  + Payment method
+  + Item list: name, Qty, Price, Amount
+  + Total
+  + Tendered
+  + Change
+  + Thank-you line
+- Receipt is displayed in a read-only QTextEdit inside a QDialog.
+- Font uses Consolas for receipt-style alignment.
+- The app currently previews the receipt only; it does not write receipt.txt yet.
+
+10. How To Run
+- Setup:
+  .\setup.ps1
+
+- Run main app:
+  .\.venv\Scripts\python.exe main.py
+
+- Legacy run command:
+  .\.venv\Scripts\python.exe pos_terminal.py
+
+11. Verified Commands
+- Compile check:
+  python -m py_compile main.py pos_terminal.py database\db.py pos_terminal\pos_window.py product_management\product_management_window.py
+
+- Smoke tests previously checked:
+  + QStackedWidget has 2 pages and page switching works.
+  + Qty set to 0 removes cart item.
+  + db.create_sale() saves a sale into SQLite.
+  + Receipt text contains "MY POS SHOP".
+
+12. Next Work
+- Add product selection dialog when POS search returns multiple matches.
+- Add sale_id / receipt number to Receipt Preview.
+- Add receipt.txt export or PDF export if needed.
+- Add Refund/Return workflow.
+- Add Inventory / Stock Quantity.
+- Add discount per item or per bill.
+- Add tax/VAT/service charge.
+- Add Sales History page for sales and sale_items.
+- Add Category Management if categories need separate administration.
+- Add database migration support for future schema changes.
+- Add .gitignore for .venv, __pycache__, and optionally pos.db.
+
+13. Developer Notes
+- Avoid raw SQL inside UI files when possible. Add database functions in database/db.py.
+- For POS changes, edit pos_terminal/pos_window.py.
+- For Product Management changes, edit product_management/product_management_window.py.
+- For database/schema/helper changes, edit database/db.py.
+- UI text is currently English by app requirement.
+- pos.db is runtime data and may differ between machines.
+- .venv and __pycache__ are generated folders, not source code.
+- If PyQt6 import fails, rerun .\setup.ps1 or check that the .venv interpreter is being used.

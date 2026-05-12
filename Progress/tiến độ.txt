@@ -1,0 +1,264 @@
+TIEN DO DU AN POS DESKTOP
+Cap nhat gan nhat: 2026-05-07
+
+1. Trang thai hien tai
+- Du an la ung dung POS desktop viet bang Python + PyQt6.
+- App dang chay theo mo hinh 1 cua so duy nhat, dung QStackedWidget de doi noi dung giua POS Terminal va Product Management.
+- Database dung SQLite built-in cua Python thong qua sqlite3.
+- File database chinh la pos.db nam o thu muc goc project.
+- POS Terminal va Product Management dung chung database pos.db.
+- Product Management quan ly bang products.
+- POS Terminal doc products de ban hang, luu giao dich vao sales va sale_items.
+- Backend thanh toan Cash, Split Payment, Void/Cancel da co logic co ban.
+- Sau khi thanh toan thanh cong, app tao popup Receipt Preview mo phong in bill.
+
+2. Cau truc file chinh
+- main.py
+  Entry point chinh. Tao QApplication, cau hinh style/font, mo PosMainWindow.
+
+- pos_terminal.py
+  Wrapper de van chay duoc lenh cu. File nay import main() tu main.py.
+
+- requirements.txt
+  Dependency hien tai: PyQt6==6.7.1.
+
+- setup.ps1
+  Script PowerShell tao virtual environment, nang pip, cai requirements.
+
+- README_SETUP.md
+  Huong dan setup va chay app.
+
+- pos.db
+  SQLite database runtime dung chung cho app.
+
+- database/__init__.py
+  Danh dau database la Python package.
+
+- database/db.py
+  Database helper dung chung. Nen dat SQL va cac ham doc/ghi database o day.
+
+- pos_terminal/__init__.py
+  Danh dau pos_terminal la Python package.
+
+- pos_terminal/pos_window.py
+  Man hinh chinh PosMainWindow. Chua sidebar, QStackedWidget, POS Terminal page, checkout logic, cart logic, payment logic, receipt preview.
+
+- product_management/__init__.py
+  Danh dau product_management la Python package.
+
+- product_management/product_management_window.py
+  Product Management page. Chua UI va logic CRUD san pham.
+
+- Progress/tiến độ.txt
+  File tien do tieng Viet cho nguoi tiep tuc du an.
+
+- Progress/POS DESKTOP PROJECT PROGRESS.txt
+  File tien do tieng Anh tuong ung.
+
+3. Luong giao dien hien tai
+- main.py tao QApplication va mo PosMainWindow.
+- PosMainWindow trong pos_terminal/pos_window.py la cua so duy nhat cua app.
+- Sidebar ben trai co 2 muc:
+  + POS Terminal
+  + Product Management
+- Khi bam menu, QStackedWidget doi page ben phai, khong mo them cua so moi.
+- Product Management hien la QWidget page, khong con la QDialog rieng.
+
+4. Database hien tai
+- database/db.py tao cac bang neu chua ton tai bang init_db().
+
+Bang products:
+CREATE TABLE IF NOT EXISTS products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    barcode TEXT UNIQUE,
+    name TEXT NOT NULL,
+    price REAL NOT NULL,
+    category TEXT,
+    requires_weight BOOLEAN DEFAULT 0
+)
+
+Bang sales:
+CREATE TABLE IF NOT EXISTS sales (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    total_amount REAL NOT NULL,
+    payment_method TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+
+Bang sale_items:
+CREATE TABLE IF NOT EXISTS sale_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    sale_id INTEGER NOT NULL,
+    barcode TEXT,
+    qty INTEGER NOT NULL,
+    price REAL NOT NULL,
+    subtotal REAL NOT NULL,
+    FOREIGN KEY (sale_id) REFERENCES sales (id)
+)
+
+5. Ham database dang co trong database/db.py
+- get_connection()
+  Mo ket noi den pos.db va tra ve sqlite3.Row.
+
+- init_db()
+  Tao products, sales, sale_items neu chua ton tai.
+
+- get_all_products()
+  Lay tat ca products.
+
+- search_products(keyword)
+  Tim products theo name hoac barcode.
+
+- get_product_by_barcode(barcode)
+  Tim dung 1 product theo barcode.
+
+- add_product(), update_product(), delete_product()
+  CRUD san pham.
+
+- find_product_for_sale(keyword)
+  Ho tro POS Terminal tim san pham khi scan/search.
+
+- create_sale(total_amount, payment_method, sale_items)
+  Luu hoa don vao sales va cac dong hang vao sale_items.
+
+6. Product Management hien tai
+- File chinh: product_management/product_management_window.py.
+- La QWidget page nam trong QStackedWidget cua PosMainWindow.
+- UI dung QFormLayout cho form nhap lieu nen cac field thang hang hon.
+- Search realtime bang textChanged.
+- Input fields:
+  + Barcode
+  + Product Name
+  + Price
+  + Category
+- Checkbox:
+  + Requires Weight
+- Buttons:
+  + Add Product
+  + Update Product
+  + Delete Product
+- Table columns:
+  + No.
+  + Barcode
+  + Product Name
+  + Price
+  + Category
+  + Requires Weight
+- Cot No. la so thu tu hien thi 1, 2, 3... khong phai id database.
+- ID database that duoc luu an trong UserRole cua cell No. de update/delete dung record.
+- Khi xoa san pham, No. tu dong danh lai theo danh sach hien tai.
+- Validate dang co:
+  + Product Name khong duoc rong.
+  + Price phai la so hop le va khong am.
+  + Barcode unique, neu trung se bao loi.
+- Delete co QMessageBox xac nhan.
+
+7. POS Terminal hien tai
+- File chinh: pos_terminal/pos_window.py.
+- Search/scan bar o tren cart.
+- Nguoi dung nhap barcode hoac product name roi nhan Enter.
+- POS goi db.find_product_for_sale(keyword).
+- Neu tim thay 1 san pham:
+  + Them vao cart.
+  + Neu da co trong cart thi tang Qty.
+  + Cap nhat subtotal va Total Amount.
+- Neu khong tim thay:
+  + Hien QMessageBox warning "Product Not Found".
+- Neu co nhieu ket qua:
+  + Hien QMessageBox warning yeu cau nhap cu the hon.
+- Cart columns:
+  + Barcode
+  + Product Name
+  + Qty
+  + Unit Price
+  + Subtotal
+  + Action
+- Cot Qty cho double-click de sua so luong.
+- Neu sua Qty ve 0 hoac so am, item bi xoa khoi cart.
+- Cot Action co nut Delete de xoa item thu cong.
+
+8. Logic thanh toan hien tai
+- Pay Cash:
+  + Doc Total Amount tu cart.
+  + Doc Tendered tu QLineEdit.
+  + Neu Tendered < Total thi QMessageBox.warning.
+  + Neu du tien thi tinh Change.
+  + Luu vao sales voi payment_method = Cash.
+  + Luu tung dong cart vao sale_items.
+  + Hien QMessageBox "Payment successful" kem Change.
+  + Tao Receipt Preview popup.
+  + Don cart de ban don moi.
+
+- Split Payment:
+  + Mo QDialog popup.
+  + Co 2 field: Cash va Card/Transfer.
+  + Co nut Confirm.
+  + Cash + Card/Transfer phai >= Total Amount.
+  + Neu du tien thi luu vao sales voi payment_method = Split.
+  + Luu tung dong cart vao sale_items.
+  + Hien QMessageBox "Payment successful" kem Change.
+  + Tao Receipt Preview popup.
+  + Dong dialog va don cart.
+
+- Void/Cancel:
+  + Hien QMessageBox.question voi noi dung:
+    "Are you sure you want to void this transaction?"
+  + Neu Yes thi xoa cart, reset Total Amount ve $0.00, xoa Tendered.
+  + Neu No thi khong lam gi.
+
+9. Receipt Preview hien tai
+- Sau Pay Cash hoac Split Payment thanh cong, app tao text bill va hien trong QDialog.
+- Receipt co:
+  + Ten cua hang: MY POS SHOP
+  + Ngay gio thanh toan
+  + Payment method
+  + Danh sach item: ten mon, Qty, Price, Amount
+  + Total
+  + Tendered
+  + Change
+  + Loi cam on
+- Receipt hien trong QTextEdit read-only voi font Consolas de can le giong bill sieu thi.
+- Hien tai chua luu receipt.txt ra file; moi chi preview bang popup.
+
+10. Cach chay app
+- Cai moi truong:
+  .\setup.ps1
+
+- Chay app chinh:
+  .\.venv\Scripts\python.exe main.py
+
+- Lenh cu van chay duoc:
+  .\.venv\Scripts\python.exe pos_terminal.py
+
+11. Lenh kiem tra da chay
+- Compile check:
+  python -m py_compile main.py pos_terminal.py database\db.py pos_terminal\pos_window.py product_management\product_management_window.py
+
+- Smoke test da tung kiem tra:
+  + QStackedWidget co 2 page va doi page duoc.
+  + Sua Qty ve 0 thi xoa item khoi cart.
+  + Tao sale vao SQLite bang db.create_sale().
+  + Tao receipt text co "MY POS SHOP".
+
+12. Viec can lam tiep theo
+- Them dialog chon san pham khi search ra nhieu ket qua trong POS Terminal.
+- Them luu them sale_id / receipt number vao receipt preview.
+- Them chuc nang luu receipt.txt hoac export PDF neu can in/luu hoa don.
+- Them Refund/Return neu can nghiep vu tra hang.
+- Them Inventory / Stock Quantity neu can quan ly ton kho.
+- Them giam gia theo dong hang hoac theo tong bill.
+- Them tax/VAT/service charge neu can.
+- Them Sales History page de xem lai sales va sale_items.
+- Them Category Management neu muon quan ly category rieng.
+- Them database migration neu schema sau nay thay doi.
+- Them .gitignore de bo qua .venv, __pycache__, pos.db neu khong muon commit data runtime.
+
+13. Ghi chu cho nguoi tiep tuc code
+- Han che viet SQL truc tiep trong UI. Nen them ham vao database/db.py roi goi tu UI.
+- Sua POS Terminal thi xem pos_terminal/pos_window.py.
+- Sua Product Management thi xem product_management/product_management_window.py.
+- Sua schema/database helper thi xem database/db.py.
+- UI text hien dang bang tieng Anh theo yeu cau cua ung dung.
+- File pos.db la runtime database, co the chua data that tuy may.
+- .venv va __pycache__ la folder sinh ra khi chay, khong phai source chinh.
+- Neu loi PyQt6/import, chay lai .\setup.ps1 hoac kiem tra Python dang dung .venv.
