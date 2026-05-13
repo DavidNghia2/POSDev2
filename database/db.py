@@ -47,6 +47,18 @@ def init_db() -> None:
         )
         connection.execute(
             """
+            CREATE TABLE IF NOT EXISTS product_barcodes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                barcode TEXT NOT NULL UNIQUE,
+                is_primary INTEGER DEFAULT 0,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (product_id) REFERENCES products (id)
+            )
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS sales (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -108,6 +120,7 @@ def init_db() -> None:
         add_column_if_missing(connection, "products", "stock_qty", "stock_qty REAL DEFAULT 0")
         add_column_if_missing(connection, "products", "active", "active INTEGER DEFAULT 1")
         add_column_if_missing(connection, "products", "updated_at", "updated_at TEXT")
+        add_column_if_missing(connection, "products", "image_path", "image_path TEXT")
         add_column_if_missing(connection, "sales", "user_id", "user_id INTEGER")
         add_column_if_missing(connection, "sales", "register_id", "register_id INTEGER")
         add_column_if_missing(connection, "sales", "shift_id", "shift_id INTEGER")
@@ -117,6 +130,8 @@ def init_db() -> None:
         add_column_if_missing(connection, "sale_items", "product_id", "product_id INTEGER")
         add_column_if_missing(connection, "sale_items", "name", "name TEXT")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_products_barcode ON products (barcode)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_product_barcodes_product ON product_barcodes (product_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_product_barcodes_barcode ON product_barcodes (barcode)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_products_sku ON products (sku)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_products_name ON products (name)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_sales_datetime ON sales (created_at)")
@@ -125,6 +140,14 @@ def init_db() -> None:
         connection.execute("CREATE INDEX IF NOT EXISTS idx_sales_shift ON sales (shift_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_sale_items_sale ON sale_items (sale_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue (status)")
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO product_barcodes (product_id, barcode, is_primary)
+            SELECT id, barcode, 1
+            FROM products
+            WHERE barcode IS NOT NULL AND TRIM(barcode) <> ''
+            """
+        )
         connection.commit()
 
 
@@ -133,21 +156,64 @@ def normalize_barcode(barcode: str) -> str | None:
     return clean_barcode or None
 
 
-def get_all_products() -> list[sqlite3.Row]:
+def normalize_barcodes(barcodes: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for barcode in barcodes:
+        clean_barcode = barcode.strip()
+        if not clean_barcode or clean_barcode in seen:
+            continue
+        normalized.append(clean_barcode)
+        seen.add(clean_barcode)
+    return normalized
+
+
+def fetch_product_barcodes(connection: sqlite3.Connection, product_id: int) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT barcode
+        FROM product_barcodes
+        WHERE product_id = ?
+        ORDER BY is_primary DESC, id ASC
+        """,
+        (product_id,),
+    ).fetchall()
+    return [str(row["barcode"]) for row in rows]
+
+
+def product_row_to_dict(
+    row: sqlite3.Row,
+    barcodes: list[str] | None = None,
+    matched_barcode: str | None = None,
+) -> dict[str, Any]:
+    product = row_to_dict(row)
+    product_barcodes = barcodes or []
+    primary_barcode = product_barcodes[0] if product_barcodes else (product.get("barcode") or "")
+    product["barcodes"] = product_barcodes
+    product["primary_barcode"] = primary_barcode
+    product["barcode"] = matched_barcode or primary_barcode
+    return product
+
+
+def get_all_products() -> list[dict[str, Any]]:
     init_db()
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT id, barcode, name, price, category, requires_weight
+            SELECT id, barcode, name, price, category, requires_weight, image_path
             FROM products
             WHERE active = 1
             ORDER BY id DESC
             """
         )
-        return cursor.fetchall()
+        rows = cursor.fetchall()
+        return [
+            product_row_to_dict(row, fetch_product_barcodes(connection, int(row["id"])))
+            for row in rows
+        ]
 
 
-def search_products(keyword: str) -> list[sqlite3.Row]:
+def search_products(keyword: str) -> list[dict[str, Any]]:
     init_db()
     clean_keyword = keyword.strip()
     if not clean_keyword:
@@ -157,17 +223,40 @@ def search_products(keyword: str) -> list[sqlite3.Row]:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT id, barcode, name, price, category, requires_weight
-            FROM products
-            WHERE active = 1 AND (name LIKE ? OR barcode LIKE ? OR sku LIKE ?)
-            ORDER BY name ASC, id DESC
+            SELECT DISTINCT p.id, p.barcode, p.name, p.price, p.category, p.requires_weight, p.image_path
+            FROM products p
+            LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+            WHERE p.active = 1
+              AND (p.name LIKE ? OR p.barcode LIKE ? OR p.sku LIKE ? OR pb.barcode LIKE ?)
+            ORDER BY p.name ASC, p.id DESC
             """,
-            (search_value, search_value, search_value),
+            (search_value, search_value, search_value, search_value),
         )
-        return cursor.fetchall()
+        rows = cursor.fetchall()
+        return [
+            product_row_to_dict(row, fetch_product_barcodes(connection, int(row["id"])))
+            for row in rows
+        ]
 
 
-def get_product_by_barcode(barcode: str) -> sqlite3.Row | None:
+def get_product_by_id(product_id: int) -> dict[str, Any] | None:
+    init_db()
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT id, barcode, name, price, category, requires_weight, image_path
+            FROM products
+            WHERE active = 1 AND id = ?
+            LIMIT 1
+            """,
+            (product_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return product_row_to_dict(row, fetch_product_barcodes(connection, int(row["id"])))
+
+
+def get_product_by_barcode(barcode: str) -> dict[str, Any] | None:
     init_db()
     clean_barcode = barcode.strip()
     if not clean_barcode:
@@ -176,66 +265,105 @@ def get_product_by_barcode(barcode: str) -> sqlite3.Row | None:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT id, barcode, name, price, category, requires_weight
-            FROM products
-            WHERE active = 1 AND barcode = ?
+            SELECT p.id, p.barcode, p.name, p.price, p.category, p.requires_weight, p.image_path
+            FROM products p
+            LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+            WHERE p.active = 1 AND (p.barcode = ? OR pb.barcode = ?)
             LIMIT 1
             """,
-            (clean_barcode,),
+            (clean_barcode, clean_barcode),
         )
-        return cursor.fetchone()
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return product_row_to_dict(
+            row,
+            fetch_product_barcodes(connection, int(row["id"])),
+            matched_barcode=clean_barcode,
+        )
 
 
 def add_product(
-    barcode: str,
     name: str,
     price: float,
     category: str,
     requires_weight: bool,
+    image_path: str,
+    barcodes: list[str],
 ) -> int:
     init_db()
+    normalized_barcodes = normalize_barcodes(barcodes)
+    primary_barcode = normalized_barcodes[0] if normalized_barcodes else None
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            INSERT INTO products (barcode, name, price, category, requires_weight)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO products (barcode, name, price, category, requires_weight, image_path)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
-                normalize_barcode(barcode),
+                primary_barcode,
                 name.strip(),
                 price,
                 category.strip(),
                 int(requires_weight),
+                image_path.strip() or None,
             ),
         )
+        product_id = int(cursor.lastrowid)
+        connection.executemany(
+            """
+            INSERT INTO product_barcodes (product_id, barcode, is_primary)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (product_id, barcode_value, int(index == 0))
+                for index, barcode_value in enumerate(normalized_barcodes)
+            ],
+        )
         connection.commit()
-        return int(cursor.lastrowid)
+        return product_id
 
 
 def update_product(
     product_id: int,
-    barcode: str,
     name: str,
     price: float,
     category: str,
     requires_weight: bool,
+    image_path: str,
+    barcodes: list[str],
 ) -> None:
     init_db()
+    normalized_barcodes = normalize_barcodes(barcodes)
+    primary_barcode = normalized_barcodes[0] if normalized_barcodes else None
     with get_connection() as connection:
         connection.execute(
             """
             UPDATE products
-            SET barcode = ?, name = ?, price = ?, category = ?, requires_weight = ?
+            SET barcode = ?, name = ?, price = ?, category = ?, requires_weight = ?,
+                image_path = ?, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
             (
-                normalize_barcode(barcode),
+                primary_barcode,
                 name.strip(),
                 price,
                 category.strip(),
                 int(requires_weight),
+                image_path.strip() or None,
                 product_id,
             ),
+        )
+        connection.execute("DELETE FROM product_barcodes WHERE product_id = ?", (product_id,))
+        connection.executemany(
+            """
+            INSERT INTO product_barcodes (product_id, barcode, is_primary)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (product_id, barcode_value, int(index == 0))
+                for index, barcode_value in enumerate(normalized_barcodes)
+            ],
         )
         connection.commit()
 
@@ -247,7 +375,7 @@ def delete_product(product_id: int) -> None:
         connection.commit()
 
 
-def find_product_for_sale(keyword: str) -> tuple[sqlite3.Row | None, list[sqlite3.Row]]:
+def find_product_for_sale(keyword: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
     clean_keyword = keyword.strip()
     if not clean_keyword:
         return None, []

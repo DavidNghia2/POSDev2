@@ -1,10 +1,12 @@
 import sqlite3
+from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QDoubleValidator
+from PyQt6.QtGui import QDoubleValidator, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -13,6 +15,8 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -28,6 +32,8 @@ class ProductManagementWindow(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.selected_product_id: int | None = None
+        self.image_path = ""
+        self.barcodes: list[str] = []
 
         db.init_db()
         self.create_ui()
@@ -59,7 +65,7 @@ class ProductManagementWindow(QWidget):
         root_layout.addLayout(header_layout)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search by Name or Barcode...")
+        self.search_input.setPlaceholderText("Search by Product Name or any Barcode...")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self.load_products)
         root_layout.addWidget(self.search_input)
@@ -68,82 +74,157 @@ class ProductManagementWindow(QWidget):
         content_layout.setSpacing(18)
         root_layout.addLayout(content_layout, 1)
 
-        form_panel = self.create_form_panel()
-        table_panel = self.create_table_panel()
-
-        content_layout.addWidget(form_panel)
-        content_layout.addWidget(table_panel, 1)
+        content_layout.addWidget(self.create_form_panel())
+        content_layout.addWidget(self.create_table_panel(), 1)
 
     def create_form_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("panel")
-        panel.setMinimumWidth(300)
-        panel.setMaximumWidth(360)
+        panel.setMinimumWidth(320)
+        panel.setMaximumWidth(390)
 
-        layout = QVBoxLayout(panel)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+
+        form_scroll = QScrollArea()
+        form_scroll.setObjectName("formScroll")
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        panel_layout.addWidget(form_scroll)
+
+        form_body = QWidget()
+        form_body.setObjectName("formBody")
+        form_scroll.setWidget(form_body)
+
+        layout = QVBoxLayout(form_body)
         layout.setContentsMargins(22, 22, 22, 22)
-        layout.setSpacing(16)
+        layout.setSpacing(12)
 
         section_label = QLabel("Product Details")
         section_label.setObjectName("sectionLabel")
         layout.addWidget(section_label)
 
-        form_layout = QFormLayout()
-        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
-        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        form_layout.setHorizontalSpacing(12)
-        form_layout.setVerticalSpacing(12)
-        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
-        layout.addLayout(form_layout)
+        self.image_preview = QLabel("No Image")
+        self.image_preview.setObjectName("imagePreview")
+        self.image_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image_preview.setFixedHeight(145)
+        layout.addWidget(self.image_preview)
+
+        choose_image_button = QPushButton("Choose Image")
+        choose_image_button.setObjectName("secondaryButton")
+        choose_image_button.setMinimumHeight(42)
+        choose_image_button.clicked.connect(self.choose_image)
+        layout.addWidget(choose_image_button)
+
+        barcode_section = QVBoxLayout()
+        barcode_section.setContentsMargins(0, 4, 0, 0)
+        barcode_section.setSpacing(8)
+
+        barcode_label = QLabel("Barcodes")
+        barcode_label.setObjectName("fieldSectionLabel")
+        barcode_section.addWidget(barcode_label)
+
+        barcode_input_row = QHBoxLayout()
+        barcode_input_row.setSpacing(8)
 
         self.barcode_input = QLineEdit()
         self.barcode_input.setPlaceholderText("Barcode")
+        self.barcode_input.setMinimumHeight(42)
+        self.barcode_input.returnPressed.connect(self.add_barcode_from_input)
+
+        add_barcode_button = QPushButton("Add Barcode")
+        add_barcode_button.setObjectName("smallButton")
+        add_barcode_button.setMinimumHeight(42)
+        add_barcode_button.clicked.connect(self.add_barcode_from_input)
+
+        barcode_input_row.addWidget(self.barcode_input, 1)
+        barcode_input_row.addWidget(add_barcode_button)
+        barcode_section.addLayout(barcode_input_row)
+
+        self.barcode_list_widget = QWidget()
+        self.barcode_list_layout = QVBoxLayout(self.barcode_list_widget)
+        self.barcode_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.barcode_list_layout.setSpacing(6)
+        self.barcode_list_layout.addStretch()
+
+        barcode_scroll = QScrollArea()
+        barcode_scroll.setObjectName("barcodeScroll")
+        barcode_scroll.setWidgetResizable(True)
+        barcode_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        barcode_scroll.setFixedHeight(96)
+        barcode_scroll.setWidget(self.barcode_list_widget)
+        barcode_section.addWidget(barcode_scroll)
+        layout.addLayout(barcode_section)
+
+        form_layout = QFormLayout()
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form_layout.setHorizontalSpacing(14)
+        form_layout.setVerticalSpacing(10)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        form_layout.setContentsMargins(0, 2, 0, 0)
+        layout.addLayout(form_layout)
 
         self.name_input = QLineEdit()
         self.name_input.setPlaceholderText("Product Name")
+        self.name_input.setMinimumHeight(42)
 
         self.price_input = QLineEdit()
         self.price_input.setPlaceholderText("Price")
+        self.price_input.setMinimumHeight(42)
         self.price_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
 
         self.category_input = QLineEdit()
         self.category_input.setPlaceholderText("Category")
+        self.category_input.setMinimumHeight(42)
 
-        self.requires_weight_checkbox = QCheckBox("Requires Weight")
+        self.requires_weight_checkbox = QCheckBox()
+        self.requires_weight_checkbox.setMinimumHeight(28)
 
-        form_layout.addRow("Barcode", self.barcode_input)
         form_layout.addRow("Product Name", self.name_input)
         form_layout.addRow("Price", self.price_input)
         form_layout.addRow("Category", self.category_input)
-        form_layout.addRow("", self.requires_weight_checkbox)
+        form_layout.addRow("Requires Weight", self.requires_weight_checkbox)
 
         button_layout = QVBoxLayout()
+        button_layout.setContentsMargins(0, 2, 0, 0)
         button_layout.setSpacing(10)
         layout.addLayout(button_layout)
 
         self.add_button = QPushButton("Add Product")
         self.add_button.setObjectName("primaryButton")
+        self.add_button.setMinimumHeight(42)
         self.add_button.clicked.connect(self.add_product)
 
         self.update_button = QPushButton("Update Product")
         self.update_button.setObjectName("secondaryButton")
+        self.update_button.setMinimumHeight(42)
         self.update_button.clicked.connect(self.update_product)
 
         self.delete_button = QPushButton("Delete Product")
         self.delete_button.setObjectName("dangerButton")
+        self.delete_button.setMinimumHeight(42)
         self.delete_button.clicked.connect(self.delete_product)
+
+        self.clear_button = QPushButton("Clear Form")
+        self.clear_button.setObjectName("neutralButton")
+        self.clear_button.setMinimumHeight(42)
+        self.clear_button.clicked.connect(self.clear_form)
 
         button_layout.addWidget(self.add_button)
         button_layout.addWidget(self.update_button)
         button_layout.addWidget(self.delete_button)
+        button_layout.addWidget(self.clear_button)
         layout.addStretch()
 
+        self.render_barcode_list()
         return panel
 
     def create_table_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("panel")
-        panel.setMinimumWidth(640)
+        panel.setMinimumWidth(720)
 
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 18, 18, 18)
@@ -154,9 +235,9 @@ class ProductManagementWindow(QWidget):
         layout.addWidget(section_label)
 
         self.products_table = QTableWidget()
-        self.products_table.setColumnCount(6)
+        self.products_table.setColumnCount(7)
         self.products_table.setHorizontalHeaderLabels(
-            ["No.", "Barcode", "Product Name", "Price", "Category", "Requires Weight"]
+            ["No", "Image", "Product Name", "Barcodes", "Price", "Category", "Requires Weight"]
         )
         self.products_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.products_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -165,21 +246,21 @@ class ProductManagementWindow(QWidget):
         self.products_table.setShowGrid(False)
         self.products_table.setWordWrap(False)
         self.products_table.verticalHeader().setVisible(False)
-        self.products_table.setHorizontalScrollBarPolicy(
-            Qt.ScrollBarPolicy.ScrollBarAsNeeded
-        )
+        self.products_table.verticalHeader().setDefaultSectionSize(64)
+        self.products_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.products_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         header = self.products_table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        self.products_table.setColumnWidth(1, 160)
-        self.products_table.setColumnWidth(4, 150)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        self.products_table.setColumnWidth(1, 82)
+        self.products_table.setColumnWidth(3, 220)
         self.products_table.itemSelectionChanged.connect(self.load_selected_product)
 
         layout.addWidget(self.products_table, 1)
@@ -191,10 +272,12 @@ class ProductManagementWindow(QWidget):
 
         self.products_table.setRowCount(len(products))
         for row_index, product in enumerate(products):
+            barcodes = list(product.get("barcodes") or [])
             values = [
                 str(row_index + 1),
-                product["barcode"] or "",
+                "",
                 product["name"] or "",
+                self.format_barcodes_for_table(barcodes),
                 f'{float(product["price"]):.2f}',
                 product["category"] or "",
                 "Yes" if product["requires_weight"] else "No",
@@ -204,13 +287,19 @@ class ProductManagementWindow(QWidget):
                 table_item = QTableWidgetItem(value)
                 if column_index == 0:
                     table_item.setData(Qt.ItemDataRole.UserRole, int(product["id"]))
-                if column_index in (1, 2, 4):
+                if column_index in (2, 3, 5):
                     table_item.setTextAlignment(
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
                     )
                 else:
                     table_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.products_table.setItem(row_index, column_index, table_item)
+
+            self.products_table.setCellWidget(
+                row_index,
+                1,
+                self.create_table_image_label(str(product.get("image_path") or "")),
+            )
 
     def reload_data(self) -> None:
         self.load_products()
@@ -220,16 +309,21 @@ class ProductManagementWindow(QWidget):
         if selected_row < 0:
             return
 
-        self.selected_product_id = int(
-            self.products_table.item(selected_row, 0).data(Qt.ItemDataRole.UserRole)
-        )
-        self.barcode_input.setText(self.products_table.item(selected_row, 1).text())
-        self.name_input.setText(self.products_table.item(selected_row, 2).text())
-        self.price_input.setText(self.products_table.item(selected_row, 3).text())
-        self.category_input.setText(self.products_table.item(selected_row, 4).text())
-        self.requires_weight_checkbox.setChecked(
-            self.products_table.item(selected_row, 5).text() == "Yes"
-        )
+        product_id = int(self.products_table.item(selected_row, 0).data(Qt.ItemDataRole.UserRole))
+        product = db.get_product_by_id(product_id)
+        if product is None:
+            return
+
+        self.selected_product_id = product_id
+        self.image_path = str(product.get("image_path") or "")
+        self.barcodes = list(product.get("barcodes") or [])
+        self.name_input.setText(str(product.get("name") or ""))
+        self.price_input.setText(f'{float(product["price"]):.2f}')
+        self.category_input.setText(str(product.get("category") or ""))
+        self.requires_weight_checkbox.setChecked(bool(product.get("requires_weight")))
+        self.barcode_input.clear()
+        self.update_image_preview()
+        self.render_barcode_list()
 
     def add_product(self) -> None:
         form_data = self.get_form_data()
@@ -239,7 +333,7 @@ class ProductManagementWindow(QWidget):
         try:
             db.add_product(*form_data)
         except sqlite3.IntegrityError:
-            self.show_error("A product with this barcode already exists.")
+            self.show_error("A product with one of these barcodes already exists.")
             return
 
         self.clear_form()
@@ -258,7 +352,7 @@ class ProductManagementWindow(QWidget):
         try:
             db.update_product(self.selected_product_id, *form_data)
         except sqlite3.IntegrityError:
-            self.show_error("A product with this barcode already exists.")
+            self.show_error("A product with one of these barcodes already exists.")
             return
 
         self.clear_form()
@@ -285,8 +379,11 @@ class ProductManagementWindow(QWidget):
         self.load_products()
         self.data_changed.emit()
 
-    def get_form_data(self) -> tuple[str, str, float, str, bool] | None:
-        barcode = self.barcode_input.text().strip()
+    def get_form_data(self) -> tuple[str, float, str, bool, str, list[str]] | None:
+        pending_barcode = self.barcode_input.text().strip()
+        if pending_barcode and not self.add_barcode(pending_barcode):
+            return None
+
         name = self.name_input.text().strip()
         price_text = self.price_input.text().strip()
         category = self.category_input.text().strip()
@@ -304,7 +401,118 @@ class ProductManagementWindow(QWidget):
             self.show_error("Please enter a valid price.")
             return None
 
-        return barcode, name, price, category, requires_weight
+        return name, price, category, requires_weight, self.image_path, list(self.barcodes)
+
+    def choose_image(self) -> None:
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Choose Product Image",
+            "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif);;All Files (*)",
+        )
+        if not file_path:
+            return
+        self.image_path = file_path
+        self.update_image_preview()
+
+    def add_barcode_from_input(self) -> None:
+        self.add_barcode(self.barcode_input.text().strip())
+
+    def add_barcode(self, barcode: str) -> bool:
+        clean_barcode = barcode.strip()
+        if not clean_barcode:
+            return True
+        if clean_barcode in self.barcodes:
+            self.show_error("This barcode is already in the list.")
+            return False
+        self.barcodes.append(clean_barcode)
+        self.barcode_input.clear()
+        self.render_barcode_list()
+        return True
+
+    def remove_barcode(self, barcode: str) -> None:
+        self.barcodes = [item for item in self.barcodes if item != barcode]
+        self.render_barcode_list()
+
+    def render_barcode_list(self) -> None:
+        while self.barcode_list_layout.count():
+            item = self.barcode_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        if not self.barcodes:
+            empty_label = QLabel("No barcodes added")
+            empty_label.setObjectName("emptyBarcodeLabel")
+            empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.barcode_list_layout.addWidget(empty_label)
+        else:
+            for barcode in self.barcodes:
+                self.barcode_list_layout.addWidget(self.create_barcode_row(barcode))
+        self.barcode_list_layout.addStretch()
+
+    def create_barcode_row(self, barcode: str) -> QWidget:
+        row = QFrame()
+        row.setObjectName("barcodeRow")
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(10, 6, 6, 6)
+        row_layout.setSpacing(8)
+
+        label = QLabel(barcode)
+        label.setObjectName("barcodeValue")
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+        delete_button = QPushButton("X")
+        delete_button.setObjectName("barcodeDeleteButton")
+        delete_button.setToolTip("Remove barcode")
+        delete_button.setFixedSize(26, 24)
+        delete_button.clicked.connect(lambda _checked=False, value=barcode: self.remove_barcode(value))
+
+        row_layout.addWidget(label, 1)
+        row_layout.addWidget(delete_button)
+        return row
+
+    def update_image_preview(self) -> None:
+        self.set_label_pixmap(self.image_preview, self.image_path, "No Image", 330, 140)
+
+    def create_table_image_label(self, image_path: str) -> QLabel:
+        label = QLabel("No Image")
+        label.setObjectName("tableImage")
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setFixedSize(70, 54)
+        self.set_label_pixmap(label, image_path, "No Image", 64, 48)
+        return label
+
+    def set_label_pixmap(
+        self,
+        label: QLabel,
+        image_path: str,
+        fallback_text: str,
+        width: int,
+        height: int,
+    ) -> None:
+        if image_path and Path(image_path).exists():
+            pixmap = QPixmap(image_path)
+            if not pixmap.isNull():
+                label.setPixmap(
+                    pixmap.scaled(
+                        width,
+                        height,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                label.setText("")
+                return
+        label.setPixmap(QPixmap())
+        label.setText(fallback_text)
+
+    def format_barcodes_for_table(self, barcodes: list[str]) -> str:
+        if not barcodes:
+            return ""
+        if len(barcodes) <= 3:
+            return ", ".join(barcodes)
+        return f"{barcodes[0]} + {len(barcodes) - 1} more"
 
     def clear_form(self) -> None:
         self.selected_product_id = None
@@ -313,12 +521,16 @@ class ProductManagementWindow(QWidget):
         self.products_table.setCurrentCell(-1, -1)
         self.products_table.blockSignals(was_blocked)
 
+        self.image_path = ""
+        self.barcodes = []
         self.barcode_input.clear()
         self.name_input.clear()
         self.price_input.clear()
         self.category_input.clear()
         self.requires_weight_checkbox.setChecked(False)
-        self.barcode_input.setFocus()
+        self.update_image_preview()
+        self.render_barcode_list()
+        self.name_input.setFocus()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -354,14 +566,56 @@ class ProductManagementWindow(QWidget):
                 font-weight: 700;
             }
 
+            #fieldSectionLabel {
+                color: #25313D;
+                font-size: 13px;
+                font-weight: 700;
+            }
+
             #panel {
                 background: #FFFFFF;
                 border: 1px solid #D8E0E8;
                 border-radius: 10px;
             }
 
+            #formScroll, #formBody {
+                background: #FFFFFF;
+                border: none;
+            }
+
             QLabel {
                 background: transparent;
+            }
+
+            #imagePreview, #tableImage {
+                background: #F8FAFC;
+                border: 1px solid #D8E0E8;
+                border-radius: 8px;
+                color: #64707D;
+                font-size: 12px;
+                font-weight: 700;
+            }
+
+            #barcodeScroll {
+                background: #F8FAFC;
+                border: 1px solid #D8E0E8;
+                border-radius: 8px;
+            }
+
+            #barcodeRow {
+                background: #FFFFFF;
+                border: 1px solid #E5EAF0;
+                border-radius: 7px;
+            }
+
+            #barcodeValue {
+                color: #25313D;
+                font-weight: 700;
+            }
+
+            #emptyBarcodeLabel {
+                color: #7B8794;
+                padding: 20px;
             }
 
             QLineEdit {
@@ -369,6 +623,7 @@ class ProductManagementWindow(QWidget):
                 border: 1px solid #C9D3DE;
                 border-radius: 8px;
                 padding: 10px 12px;
+                min-height: 20px;
                 selection-background-color: #2563EB;
                 selection-color: #FFFFFF;
             }
@@ -388,7 +643,8 @@ class ProductManagementWindow(QWidget):
                 border-radius: 8px;
                 color: #FFFFFF;
                 font-weight: 700;
-                padding: 12px 14px;
+                min-height: 42px;
+                padding: 0 14px;
             }
 
             #primaryButton {
@@ -401,6 +657,23 @@ class ProductManagementWindow(QWidget):
 
             #dangerButton {
                 background: #DC2626;
+            }
+
+            #neutralButton {
+                background: #64748B;
+            }
+
+            #smallButton {
+                background: #2563EB;
+                min-width: 104px;
+                padding: 0 12px;
+            }
+
+            #barcodeDeleteButton {
+                background: #FEE2E2;
+                color: #B91C1C;
+                border-radius: 6px;
+                padding: 0;
             }
 
             QPushButton:pressed {

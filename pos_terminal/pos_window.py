@@ -1,8 +1,9 @@
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -557,13 +558,27 @@ class PosMainWindow(QMainWindow):
         image_placeholder.setObjectName("productImagePlaceholder")
         image_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image_placeholder.setMinimumHeight(76)
+        image_path = str(product.get("image_path") or "")
+        if image_path and Path(image_path).exists():
+            pixmap = QPixmap(image_path)
+            if not pixmap.isNull():
+                image_placeholder.setPixmap(
+                    pixmap.scaled(
+                        150,
+                        76,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                )
+                image_placeholder.setText("")
 
         name_label = QLabel(str(product["name"]))
         name_label.setObjectName("productName")
         name_label.setWordWrap(True)
         name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        barcode = product["barcode"] or "No barcode"
+        barcodes = list(product.get("barcodes") or [])
+        barcode = self.format_product_barcodes(barcodes) or product["barcode"] or "No barcode"
         barcode_label = QLabel(f"Barcode: {barcode}")
         barcode_label.setObjectName("productBarcode")
         barcode_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
@@ -583,6 +598,13 @@ class PosMainWindow(QMainWindow):
         )
         return card
 
+    def format_product_barcodes(self, barcodes: list[str]) -> str:
+        if not barcodes:
+            return ""
+        if len(barcodes) == 1:
+            return barcodes[0]
+        return f"{barcodes[0]} + {len(barcodes) - 1} more"
+
     def create_checkout_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("checkoutPanel")
@@ -595,8 +617,8 @@ class PosMainWindow(QMainWindow):
         self.cart_count_label.setObjectName("panelSubtitle")
         self.cart_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
-        self.cart_table = QTableWidget(0, 5)
-        self.cart_table.setHorizontalHeaderLabels(["Name", "Qty", "Price", "Total", ""])
+        self.cart_table = QTableWidget(0, 6)
+        self.cart_table.setHorizontalHeaderLabels(["Barcode", "Name", "Qty", "Price", "Total", ""])
         self.cart_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.cart_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.cart_table.setAlternatingRowColors(True)
@@ -610,9 +632,11 @@ class PosMainWindow(QMainWindow):
         self.cart_table.verticalHeader().setVisible(False)
         self.cart_table.verticalHeader().setDefaultSectionSize(58)
         self.cart_table.horizontalHeader().setStretchLastSection(False)
-        self.cart_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.cart_table.horizontalHeader().setSectionResizeMode(
-            1, QHeaderView.ResizeMode.ResizeToContents
+            0, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.cart_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.Stretch
         )
         self.cart_table.horizontalHeader().setSectionResizeMode(
             2, QHeaderView.ResizeMode.ResizeToContents
@@ -623,10 +647,14 @@ class PosMainWindow(QMainWindow):
         self.cart_table.horizontalHeader().setSectionResizeMode(
             4, QHeaderView.ResizeMode.ResizeToContents
         )
-        self.cart_table.setColumnWidth(1, 54)
-        self.cart_table.setColumnWidth(2, 88)
-        self.cart_table.setColumnWidth(3, 94)
-        self.cart_table.setColumnWidth(4, 34)
+        self.cart_table.horizontalHeader().setSectionResizeMode(
+            5, QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.cart_table.setColumnWidth(0, 110)
+        self.cart_table.setColumnWidth(2, 54)
+        self.cart_table.setColumnWidth(3, 88)
+        self.cart_table.setColumnWidth(4, 94)
+        self.cart_table.setColumnWidth(5, 34)
         self.cart_table.itemSelectionChanged.connect(self.sync_status)
         self.cart_table.itemChanged.connect(self.handle_cart_item_changed)
         self.cart_table.setObjectName("cartTable")
@@ -753,7 +781,7 @@ class PosMainWindow(QMainWindow):
         self.cart_items.append(
             CartItem(
                 product_id=product_id,
-                barcode=product["barcode"] or "",
+                barcode=product["barcode"] or product.get("primary_barcode") or "",
                 name=product["name"],
                 qty=quantity,
                 unit_price=float(product["price"]),
@@ -767,6 +795,7 @@ class PosMainWindow(QMainWindow):
         self.cart_table.setRowCount(len(self.cart_items))
         for row, item in enumerate(self.cart_items):
             values = [
+                item.barcode,
                 item.name,
                 f"{item.qty:g}",
                 f"${item.unit_price:,.2f}",
@@ -775,17 +804,17 @@ class PosMainWindow(QMainWindow):
             for column, value in enumerate(values):
                 table_item = QTableWidgetItem(value)
                 table_item.setData(Qt.ItemDataRole.UserRole, item.product_id)
-                if column == 0:
+                if column in (0, 1):
                     table_item.setTextAlignment(
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
                     )
-                elif column >= 2:
+                elif column >= 3:
                     table_item.setTextAlignment(
                         Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
                     )
                 else:
                     table_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                if column != 1:
+                if column != 2:
                     table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.cart_table.setItem(row, column, table_item)
 
@@ -798,7 +827,7 @@ class PosMainWindow(QMainWindow):
                     product_id
                 )
             )
-            self.cart_table.setCellWidget(row, 4, delete_button)
+            self.cart_table.setCellWidget(row, 5, delete_button)
 
         self.cart_table_updating = False
         if hasattr(self, "cart_count_label"):
@@ -809,7 +838,7 @@ class PosMainWindow(QMainWindow):
             self.cart_table.scrollToBottom()
 
     def handle_cart_item_changed(self, table_item: QTableWidgetItem) -> None:
-        if self.cart_table_updating or table_item.column() != 1:
+        if self.cart_table_updating or table_item.column() != 2:
             return
 
         product_id = table_item.data(Qt.ItemDataRole.UserRole)
