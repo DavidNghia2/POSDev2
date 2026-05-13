@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import (
     QDateEdit,
     QFrame,
     QHBoxLayout,
+    QLayout,
+    QLayoutItem,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -44,16 +46,34 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
         )
         items_row = cursor.fetchone()
         
-        # Get payment method breakdown
+        # Get payment method breakdown from payment rows so split payments are counted correctly.
         cursor = connection.execute(
             """
-            SELECT payment_method, COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
-            FROM sales
-            WHERE created_at >= ? AND created_at <= ?
-              AND status = 'completed'
+            WITH payment_rows AS (
+                SELECT sp.sale_id, sp.method as payment_method, sp.amount
+                FROM sale_payments sp
+                JOIN sales s ON s.id = sp.sale_id
+                WHERE s.created_at >= ? AND s.created_at <= ?
+                  AND s.status = 'completed'
+
+                UNION ALL
+
+                SELECT s.id as sale_id, s.payment_method, s.total_amount as amount
+                FROM sales s
+                WHERE s.created_at >= ? AND s.created_at <= ?
+                  AND s.status = 'completed'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM sale_payments sp WHERE sp.sale_id = s.id
+                  )
+            )
+            SELECT payment_method,
+                   COUNT(DISTINCT sale_id) as count,
+                   COALESCE(SUM(amount), 0) as total
+            FROM payment_rows
             GROUP BY payment_method
+            ORDER BY total DESC
             """,
-            (start_date, end_date),
+            (start_date, end_date, start_date, end_date),
         )
         payment_stats = cursor.fetchall()
         
@@ -83,19 +103,45 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
         }
 
 
-def get_top_products(limit: int = 5) -> list:
+def get_top_products(start_date: str, end_date: str, limit: int = 5) -> list:
     with db.get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT si.barcode, si.name, SUM(si.qty) as total_qty, SUM(si.subtotal) as total_sales
-            FROM sale_items si
-            JOIN sales s ON s.id = si.sale_id
-            WHERE s.status = 'completed'
-            GROUP BY si.barcode, si.name
+            WITH resolved_items AS (
+                SELECT
+                    COALESCE(
+                        'product:' || product_by_id.id,
+                        'product:' || product_by_barcode.id,
+                        'barcode:' || NULLIF(si.barcode, ''),
+                        'name:' || NULLIF(si.name, ''),
+                        'item:' || si.id
+                    ) as product_key,
+                    COALESCE(product_by_id.barcode, product_by_barcode.barcode, si.barcode) as barcode,
+                    COALESCE(
+                        product_by_id.name,
+                        product_by_barcode.name,
+                        NULLIF(si.name, ''),
+                        NULLIF(si.barcode, ''),
+                        'Unknown Product'
+                    ) as name,
+                    si.qty,
+                    si.subtotal
+                FROM sale_items si
+                JOIN sales s ON s.id = si.sale_id
+                LEFT JOIN products product_by_id ON product_by_id.id = si.product_id
+                LEFT JOIN products product_by_barcode
+                    ON si.product_id IS NULL
+                   AND product_by_barcode.barcode = si.barcode
+                WHERE s.created_at >= ? AND s.created_at <= ?
+                  AND s.status = 'completed'
+            )
+            SELECT barcode, name, SUM(qty) as total_qty, SUM(subtotal) as total_sales
+            FROM resolved_items
+            GROUP BY product_key
             ORDER BY total_sales DESC
             LIMIT ?
             """,
-            (limit,),
+            (start_date, end_date, limit),
         )
         return cursor.fetchall()
 
@@ -103,6 +149,24 @@ def get_top_products(limit: int = 5) -> list:
 def get_low_stock_products(threshold: int = 10) -> list:
     # This would require stock tracking - placeholder for now
     return []
+
+
+def clear_layout(layout: QLayout) -> None:
+    while layout.count():
+        item = layout.takeAt(0)
+        clear_layout_item(item)
+
+
+def clear_layout_item(item: QLayoutItem) -> None:
+    child_layout = item.layout()
+    if child_layout is not None:
+        clear_layout(child_layout)
+        child_layout.deleteLater()
+        return
+
+    widget = item.widget()
+    if widget is not None:
+        widget.deleteLater()
 
 
 class StatCard(QFrame):
@@ -281,20 +345,16 @@ class AdminDashboardWindow(QWidget):
         self.update_payment_breakdown(summary["payment_breakdown"])
         
         # Update top products
-        self.update_top_products()
+        self.update_top_products(start_date, end_date)
 
     def update_payment_breakdown(self, payment_data: list) -> None:
-        # Clear existing
-        while self.payment_table.count():
-            item = self.payment_table.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        clear_layout(self.payment_table)
         
         for payment in payment_data:
             row_layout = QHBoxLayout()
             row_layout.setSpacing(10)
             
-            method_label = QLabel(payment["method"])
+            method_label = QLabel(payment["method"] or "Unknown")
             method_label.setObjectName("paymentMethod")
             
             count_label = QLabel(f"{payment['count']} sales")
@@ -316,14 +376,10 @@ class AdminDashboardWindow(QWidget):
             no_data_label.setObjectName("noDataLabel")
             self.payment_table.addWidget(no_data_label)
 
-    def update_top_products(self) -> None:
-        # Clear existing
-        while self.top_products_layout.count():
-            item = self.top_products_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+    def update_top_products(self, start_date: str, end_date: str) -> None:
+        clear_layout(self.top_products_layout)
         
-        top_products = get_top_products(5)
+        top_products = get_top_products(start_date, end_date, 5)
         
         for product in top_products:
             row_layout = QHBoxLayout()
