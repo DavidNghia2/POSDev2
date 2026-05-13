@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QFrame,
@@ -24,6 +24,8 @@ from login import (
 
 
 class RegisterManagementWindow(QWidget):
+    data_changed = pyqtSignal()
+
     def __init__(self, current_user: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_user = current_user
@@ -195,6 +197,9 @@ class RegisterManagementWindow(QWidget):
                 table_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.registers_table.setItem(row_index, column_index, table_item)
 
+    def reload_data(self) -> None:
+        self.load_registers()
+
     def load_selected_register(self) -> None:
         selected_row = self.registers_table.currentRow()
         if selected_row < 0:
@@ -228,6 +233,7 @@ class RegisterManagementWindow(QWidget):
         
         self.clear_form()
         self.load_registers()
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "Register added successfully")
 
     def update_register_action(self) -> None:
@@ -251,6 +257,7 @@ class RegisterManagementWindow(QWidget):
         
         self.clear_form()
         self.load_registers()
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "Register updated successfully")
 
     def delete_register_action(self) -> None:
@@ -277,6 +284,7 @@ class RegisterManagementWindow(QWidget):
         
         self.clear_form()
         self.load_registers()
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "Register deleted successfully")
 
     def clear_form(self) -> None:

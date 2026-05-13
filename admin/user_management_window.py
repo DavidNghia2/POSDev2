@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -26,6 +26,8 @@ from login import (
 
 
 class UserManagementWindow(QWidget):
+    data_changed = pyqtSignal()
+
     def __init__(self, current_user: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_user = current_user
@@ -239,6 +241,10 @@ class UserManagementWindow(QWidget):
         for role in roles:
             self.role_combo.addItem(role["name"], role["id"])
 
+    def reload_data(self) -> None:
+        self.load_roles()
+        self.load_users()
+
     def load_selected_user(self) -> None:
         selected_row = self.users_table.currentRow()
         if selected_row < 0:
@@ -281,6 +287,7 @@ class UserManagementWindow(QWidget):
         
         self.clear_form()
         self.load_users()
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "User added successfully")
 
     def update_user_action(self) -> None:
@@ -310,6 +317,7 @@ class UserManagementWindow(QWidget):
         
         self.clear_form()
         self.load_users()
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "User updated successfully")
 
     def delete_user_action(self) -> None:
@@ -336,6 +344,7 @@ class UserManagementWindow(QWidget):
         
         self.clear_form()
         self.load_users()
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "User deleted successfully")
 
     def clear_form(self) -> None:

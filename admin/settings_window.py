@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -16,6 +16,8 @@ from login import get_setting, log_audit, set_setting
 
 
 class SettingsWindow(QWidget):
+    data_changed = pyqtSignal()
+
     def __init__(self, current_user: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_user = current_user
@@ -225,6 +227,9 @@ class SettingsWindow(QWidget):
         self.sound_effects_checkbox.setChecked(get_setting("sound_effects") != "false")
         self.offline_mode_checkbox.setChecked(get_setting("offline_mode") != "false")
 
+    def reload_data(self) -> None:
+        self.load_settings()
+
     def save_store_settings(self) -> None:
         set_setting("store_name", self.store_name_input.text().strip())
         set_setting("store_address", self.store_address_input.text().strip())
@@ -233,6 +238,7 @@ class SettingsWindow(QWidget):
         
         log_audit(self.current_user["id"], "UPDATE_SETTINGS", "settings", None, None, "store_info")
         
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "Store settings saved successfully")
 
     def save_other_settings(self) -> None:
@@ -247,6 +253,7 @@ class SettingsWindow(QWidget):
         
         log_audit(self.current_user["id"], "UPDATE_SETTINGS", "settings", None, None, "other_settings")
         
+        self.data_changed.emit()
         QMessageBox.information(self, "Success", "Settings saved successfully")
 
     def apply_styles(self) -> None:

@@ -1,6 +1,6 @@
 import sqlite3
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QDoubleValidator
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -23,6 +23,8 @@ from database import db
 
 
 class ProductManagementWindow(QWidget):
+    data_changed = pyqtSignal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.selected_product_id: int | None = None
@@ -210,6 +212,9 @@ class ProductManagementWindow(QWidget):
                     table_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.products_table.setItem(row_index, column_index, table_item)
 
+    def reload_data(self) -> None:
+        self.load_products()
+
     def load_selected_product(self) -> None:
         selected_row = self.products_table.currentRow()
         if selected_row < 0:
@@ -239,6 +244,7 @@ class ProductManagementWindow(QWidget):
 
         self.clear_form()
         self.load_products()
+        self.data_changed.emit()
 
     def update_product(self) -> None:
         if self.selected_product_id is None:
@@ -257,6 +263,7 @@ class ProductManagementWindow(QWidget):
 
         self.clear_form()
         self.load_products()
+        self.data_changed.emit()
 
     def delete_product(self) -> None:
         if self.selected_product_id is None:
@@ -276,6 +283,7 @@ class ProductManagementWindow(QWidget):
         db.delete_product(self.selected_product_id)
         self.clear_form()
         self.load_products()
+        self.data_changed.emit()
 
     def get_form_data(self) -> tuple[str, str, float, str, bool] | None:
         barcode = self.barcode_input.text().strip()

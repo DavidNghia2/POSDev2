@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -94,6 +94,8 @@ class ActionButton(QPushButton):
 
 
 class PosMainWindow(QMainWindow):
+    app_data_changed = pyqtSignal()
+
     def __init__(self, user_data: dict | None = None) -> None:
         super().__init__()
         self.setWindowTitle("POS Sales Terminal")
@@ -125,6 +127,7 @@ class PosMainWindow(QMainWindow):
         self.page_indexes: dict[str, int] = {}
 
         self.build_ui()
+        self.connect_global_refresh()
         self.populate_cart()
         self.create_shortcuts()
 
@@ -177,6 +180,43 @@ class PosMainWindow(QMainWindow):
 
         root_layout.addWidget(self.create_sidebar())
         root_layout.addWidget(self.pages, 1)
+
+    def connect_global_refresh(self) -> None:
+        self.app_data_changed.connect(self.reload_data)
+
+        for page_index in range(self.pages.count()):
+            page = self.pages.widget(page_index)
+            reload_handler = self.get_reload_handler(page)
+            if reload_handler is not None:
+                self.app_data_changed.connect(reload_handler)
+
+            data_changed_signal = getattr(page, "data_changed", None)
+            if data_changed_signal is not None:
+                data_changed_signal.connect(self.notify_app_data_changed)
+
+    def get_reload_handler(self, page: QWidget):
+        for method_name in (
+            "reload_data",
+            "load_dashboard_data",
+            "load_products",
+            "load_users",
+            "load_registers",
+            "load_settings",
+            "load_report",
+            "load_logs",
+        ):
+            handler = getattr(page, method_name, None)
+            if callable(handler):
+                return handler
+        return None
+
+    def notify_app_data_changed(self) -> None:
+        self.app_data_changed.emit()
+
+    def reload_data(self) -> None:
+        if hasattr(self, "search_input"):
+            self.load_product_grid()
+        self.refresh_total()
 
     def get_today_summary(self) -> dict[str, float | int]:
         today = datetime.now().strftime("%Y-%m-%d")
@@ -441,12 +481,26 @@ class PosMainWindow(QMainWindow):
         panel.setObjectName("cardPanel")
 
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(18, 18, 18, 16)
+        layout.setSpacing(12)
+
+        header_layout = QVBoxLayout()
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(3)
+
+        title = QLabel("Products")
+        title.setObjectName("panelTitle")
+        subtitle = QLabel("Search or scan barcode to add items to cart")
+        subtitle.setObjectName("panelSubtitle")
+
+        header_layout.addWidget(title)
+        header_layout.addWidget(subtitle)
+        layout.addLayout(header_layout)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Scan barcode or search product name...")
         self.search_input.setClearButtonEnabled(True)
+        self.search_input.setObjectName("posSearchInput")
         self.search_input.textChanged.connect(self.load_product_grid)
         self.search_input.returnPressed.connect(self.handle_product_search)
         layout.addWidget(self.search_input)
@@ -458,8 +512,8 @@ class PosMainWindow(QMainWindow):
         self.product_grid_container = QWidget()
         self.product_grid_layout = QGridLayout(self.product_grid_container)
         self.product_grid_layout.setContentsMargins(0, 0, 0, 0)
-        self.product_grid_layout.setHorizontalSpacing(12)
-        self.product_grid_layout.setVerticalSpacing(12)
+        self.product_grid_layout.setHorizontalSpacing(14)
+        self.product_grid_layout.setVerticalSpacing(14)
         self.product_scroll_area.setWidget(self.product_grid_container)
 
         layout.addWidget(self.product_scroll_area, 1)
@@ -493,33 +547,34 @@ class PosMainWindow(QMainWindow):
         card = QFrame()
         card.setObjectName("productCard")
         card.setCursor(Qt.CursorShape.PointingHandCursor)
-        card.setMinimumSize(138, 170)
+        card.setMinimumSize(150, 188)
 
         layout = QVBoxLayout(card)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(9)
 
-        image_placeholder = QLabel("Image")
+        image_placeholder = QLabel("No Image")
         image_placeholder.setObjectName("productImagePlaceholder")
         image_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        image_placeholder.setMinimumHeight(70)
+        image_placeholder.setMinimumHeight(76)
 
         name_label = QLabel(str(product["name"]))
         name_label.setObjectName("productName")
         name_label.setWordWrap(True)
-        name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        name_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        id_label = QLabel(f"ID: {product['id']}")
-        id_label.setObjectName("productId")
-        id_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        barcode = product["barcode"] or "No barcode"
+        barcode_label = QLabel(f"Barcode: {barcode}")
+        barcode_label.setObjectName("productBarcode")
+        barcode_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         price_label = QLabel(f"${float(product['price']):,.2f}")
         price_label.setObjectName("productPrice")
-        price_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        price_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         layout.addWidget(image_placeholder)
         layout.addWidget(name_label)
-        layout.addWidget(id_label)
+        layout.addWidget(barcode_label)
         layout.addWidget(price_label)
         layout.addStretch(1)
 
@@ -533,8 +588,12 @@ class PosMainWindow(QMainWindow):
         panel.setObjectName("checkoutPanel")
 
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(22, 22, 22, 18)
+        layout.setSpacing(16)
+
+        self.cart_count_label = QLabel("0 items")
+        self.cart_count_label.setObjectName("panelSubtitle")
+        self.cart_count_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.cart_table = QTableWidget(0, 5)
         self.cart_table.setHorizontalHeaderLabels(["Name", "Qty", "Price", "Total", ""])
@@ -544,8 +603,12 @@ class PosMainWindow(QMainWindow):
         self.cart_table.setShowGrid(False)
         self.cart_table.setSortingEnabled(False)
         self.cart_table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked)
+        self.cart_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        self.cart_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.cart_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerItem)
+        self.cart_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.cart_table.verticalHeader().setVisible(False)
-        self.cart_table.verticalHeader().setDefaultSectionSize(44)
+        self.cart_table.verticalHeader().setDefaultSectionSize(58)
         self.cart_table.horizontalHeader().setStretchLastSection(False)
         self.cart_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.cart_table.horizontalHeader().setSectionResizeMode(
@@ -560,8 +623,15 @@ class PosMainWindow(QMainWindow):
         self.cart_table.horizontalHeader().setSectionResizeMode(
             4, QHeaderView.ResizeMode.ResizeToContents
         )
+        self.cart_table.setColumnWidth(1, 54)
+        self.cart_table.setColumnWidth(2, 88)
+        self.cart_table.setColumnWidth(3, 94)
+        self.cart_table.setColumnWidth(4, 34)
         self.cart_table.itemSelectionChanged.connect(self.sync_status)
         self.cart_table.itemChanged.connect(self.handle_cart_item_changed)
+        self.cart_table.setObjectName("cartTable")
+        self.cart_table.setMinimumHeight(300)
+        self.cart_table.setMaximumHeight(430)
         layout.addWidget(self.cart_table, 1)
 
         totals_panel = QFrame()
@@ -572,6 +642,8 @@ class PosMainWindow(QMainWindow):
 
         self.subtotal_value_label = QLabel("$0.00")
         self.subtotal_value_label.setObjectName("amountValue")
+        self.subtotal_value_label.setMinimumWidth(120)
+        self.subtotal_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         self.discount_input = QLineEdit("0.00")
         self.discount_input.setObjectName("discountInput")
@@ -581,6 +653,8 @@ class PosMainWindow(QMainWindow):
 
         self.total_value_label = QLabel("$0.00")
         self.total_value_label.setObjectName("totalValue")
+        self.total_value_label.setMinimumWidth(140)
+        self.total_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         totals_layout.addLayout(self.create_amount_row("Subtotal", self.subtotal_value_label))
         totals_layout.addLayout(self.create_amount_row("Discount", self.discount_input))
@@ -588,12 +662,15 @@ class PosMainWindow(QMainWindow):
         layout.addWidget(totals_panel)
 
         action_layout = QVBoxLayout()
-        action_layout.setContentsMargins(0, 6, 0, 0)
+        action_layout.setContentsMargins(0, 2, 0, 0)
         action_layout.setSpacing(10)
 
         pay_cash_button = ActionButton("Pay", "primary")
+        pay_cash_button.setObjectName("payButton")
         split_payment_button = ActionButton("Split Payment", "warning")
+        split_payment_button.setObjectName("splitButton")
         void_button = ActionButton("Cancel", "neutral")
+        void_button.setObjectName("cancelButton")
 
         pay_cash_button.clicked.connect(self.handle_pay_cash)
         split_payment_button.clicked.connect(self.handle_split_payment)
@@ -604,7 +681,6 @@ class PosMainWindow(QMainWindow):
         action_layout.addWidget(void_button)
 
         layout.addLayout(action_layout)
-        layout.addStretch(1)
         return panel
 
     def create_amount_row(self, label_text: str, value_widget: QWidget) -> QHBoxLayout:
@@ -621,6 +697,9 @@ class PosMainWindow(QMainWindow):
     def create_shortcuts(self) -> None:
         escape_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         escape_shortcut.activated.connect(self.handle_void_cancel)
+
+        refresh_shortcut = QShortcut(QKeySequence("Shift+F5"), self)
+        refresh_shortcut.activated.connect(self.notify_app_data_changed)
 
         focus_search_action = QAction(self)
         focus_search_action.setShortcut(QKeySequence("Ctrl+L"))
@@ -711,7 +790,9 @@ class PosMainWindow(QMainWindow):
                 self.cart_table.setItem(row, column, table_item)
 
             delete_button = QPushButton("X")
-            delete_button.setObjectName("tableDeleteButton")
+            delete_button.setObjectName("tableDeleteIconButton")
+            delete_button.setToolTip("Remove item")
+            delete_button.setFixedSize(28, 28)
             delete_button.clicked.connect(
                 lambda _checked=False, product_id=item.product_id: self.remove_cart_item(
                     product_id
@@ -720,7 +801,12 @@ class PosMainWindow(QMainWindow):
             self.cart_table.setCellWidget(row, 4, delete_button)
 
         self.cart_table_updating = False
+        if hasattr(self, "cart_count_label"):
+            item_count = len(self.cart_items)
+            self.cart_count_label.setText(f"{item_count} item" if item_count == 1 else f"{item_count} items")
         self.refresh_total()
+        if self.cart_table.rowCount() > 0:
+            self.cart_table.scrollToBottom()
 
     def handle_cart_item_changed(self, table_item: QTableWidgetItem) -> None:
         if self.cart_table_updating or table_item.column() != 1:
@@ -783,24 +869,37 @@ class PosMainWindow(QMainWindow):
         dialog = QDialog(self)
         dialog.setWindowTitle("Payment")
         dialog.setModal(True)
-        dialog.resize(640, 420)
+        dialog.resize(720, 470)
 
         root_layout = QVBoxLayout(dialog)
-        root_layout.setContentsMargins(22, 22, 22, 22)
-        root_layout.setSpacing(18)
+        root_layout.setContentsMargins(24, 24, 24, 24)
+        root_layout.setSpacing(20)
+
+        dialog_header = QVBoxLayout()
+        dialog_header.setContentsMargins(0, 0, 0, 0)
+        dialog_header.setSpacing(4)
+
+        dialog_title = QLabel("Payment")
+        dialog_title.setObjectName("paymentDialogTitle")
+        dialog_subtitle = QLabel("Review tendered amount, change, and payment method")
+        dialog_subtitle.setObjectName("paymentDialogSubtitle")
+
+        dialog_header.addWidget(dialog_title)
+        dialog_header.addWidget(dialog_subtitle)
+        root_layout.addLayout(dialog_header)
 
         content_layout = QHBoxLayout()
-        content_layout.setSpacing(22)
+        content_layout.setSpacing(18)
         root_layout.addLayout(content_layout, 1)
 
         left_panel = QFrame()
         left_panel.setObjectName("paymentDialogPanel")
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(16, 16, 16, 16)
-        left_layout.setSpacing(12)
+        left_layout.setContentsMargins(18, 18, 18, 18)
+        left_layout.setSpacing(13)
 
-        grand_total_title = QLabel("Grand Total")
-        grand_total_title.setObjectName("sectionLabel")
+        grand_total_title = QLabel("Total Due")
+        grand_total_title.setObjectName("paymentFieldLabel")
         grand_total_value = QLabel(f"${total_amount:,.2f}")
         grand_total_value.setObjectName("paymentGrandTotal")
 
@@ -816,24 +915,32 @@ class PosMainWindow(QMainWindow):
         note_input = QLineEdit()
         note_input.setPlaceholderText("Note")
 
+        amount_label = QLabel("Amount Tendered")
+        amount_label.setObjectName("paymentFieldLabel")
+        change_label = QLabel("Change")
+        change_label.setObjectName("paymentFieldLabel")
+        note_label = QLabel("Note")
+        note_label.setObjectName("paymentFieldLabel")
+
         left_layout.addWidget(grand_total_title)
         left_layout.addWidget(grand_total_value)
-        left_layout.addWidget(QLabel("Amount Tendered"))
+        left_layout.addSpacing(4)
+        left_layout.addWidget(amount_label)
         left_layout.addWidget(amount_tendered_input)
-        left_layout.addWidget(QLabel("Change"))
+        left_layout.addWidget(change_label)
         left_layout.addWidget(change_value)
-        left_layout.addWidget(QLabel("Note"))
+        left_layout.addWidget(note_label)
         left_layout.addWidget(note_input)
         left_layout.addStretch(1)
 
         right_panel = QFrame()
         right_panel.setObjectName("paymentDialogPanel")
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(16, 16, 16, 16)
+        right_layout.setContentsMargins(18, 18, 18, 18)
         right_layout.setSpacing(12)
 
         method_title = QLabel("Payment Method")
-        method_title.setObjectName("sectionLabel")
+        method_title.setObjectName("paymentFieldLabel")
         cash_radio = QRadioButton("Cash")
         cash_radio.setChecked(True)
         bank_radio = QRadioButton("Bank Transfer")
@@ -955,6 +1062,7 @@ class PosMainWindow(QMainWindow):
                 "Payment Successful",
                 f"Payment successful.\nChange: ${change_amount:,.2f}",
             )
+            self.notify_app_data_changed()
             receipt_text = self.build_receipt_text(
                 sale_items=sale_items,
                 total_amount=total_amount,
@@ -1074,6 +1182,7 @@ class PosMainWindow(QMainWindow):
                 "Payment Successful",
                 f"Payment successful.\nChange: ${change_amount:,.2f}",
             )
+            self.notify_app_data_changed()
             receipt_text = self.build_receipt_text(
                 sale_items=sale_items,
                 total_amount=total_amount,
@@ -1297,6 +1406,18 @@ def build_stylesheet() -> str:
         border-radius: 10px;
     }}
 
+    #panelTitle {{
+        color: {TEXT_DARK};
+        font-size: 20px;
+        font-weight: 800;
+    }}
+
+    #panelSubtitle {{
+        color: {TEXT_MUTED};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+
     #productCard {{
         background: #FFFFFF;
         border: 1px solid {BORDER};
@@ -1309,9 +1430,9 @@ def build_stylesheet() -> str:
     }}
 
     #productImagePlaceholder {{
-        background: {PANEL_BG};
+        background: #F8FAFC;
         border: 1px solid {BORDER};
-        border-radius: 8px;
+        border-radius: 10px;
         color: {TEXT_MUTED};
         font-size: 12px;
         font-weight: 700;
@@ -1320,17 +1441,18 @@ def build_stylesheet() -> str:
     #productName {{
         color: {TEXT_DARK};
         font-size: 13px;
-        font-weight: 700;
+        font-weight: 800;
     }}
 
-    #productId {{
+    #productBarcode {{
         color: {TEXT_MUTED};
         font-size: 11px;
+        font-weight: 600;
     }}
 
     #productPrice {{
         color: {TEXT_DARK};
-        font-size: 15px;
+        font-size: 16px;
         font-weight: 800;
     }}
 
@@ -1391,7 +1513,7 @@ def build_stylesheet() -> str:
         alternate-background-color: #FAFBFD;
         background: #FFFFFF;
         border: 1px solid {BORDER};
-        border-radius: 10px;
+        border-radius: 12px;
         gridline-color: transparent;
         selection-background-color: rgba(37, 99, 235, 0.16);
         selection-color: {TEXT_DARK};
@@ -1409,6 +1531,35 @@ def build_stylesheet() -> str:
     QTableWidget::item {{
         border-bottom: 1px solid #EFF3F7;
         padding: 8px 10px;
+    }}
+
+    QScrollBar:vertical {{
+        background: #F3F7FD;
+        border: none;
+        border-left: 1px solid {BORDER};
+        width: 12px;
+        margin: 0;
+    }}
+
+    QScrollBar::handle:vertical {{
+        background: #C1CDDA;
+        border-radius: 5px;
+        min-height: 32px;
+    }}
+
+    QScrollBar::handle:vertical:hover {{
+        background: #9AA8B8;
+    }}
+
+    QScrollBar::add-line:vertical,
+    QScrollBar::sub-line:vertical {{
+        height: 0;
+        width: 0;
+    }}
+
+    QScrollBar::add-page:vertical,
+    QScrollBar::sub-page:vertical {{
+        background: transparent;
     }}
 
     #statusHint {{
@@ -1444,12 +1595,12 @@ def build_stylesheet() -> str:
     #amountValue {{
         color: {TEXT_DARK};
         font-size: 15px;
-        font-weight: 700;
+        font-weight: 800;
     }}
 
     #discountInput {{
         max-width: 110px;
-        padding: 6px 8px;
+        padding: 7px 9px;
     }}
 
     KeypadButton {{
@@ -1493,17 +1644,30 @@ def build_stylesheet() -> str:
         color: {TEXT_DARK};
     }}
 
-    #tableDeleteButton {{
-        background: #DC2626;
-        border: none;
-        border-radius: 6px;
-        color: #FFFFFF;
-        font-weight: 700;
-        padding: 6px 10px;
+    #payButton {{
+        min-height: 52px;
+        font-size: 15px;
     }}
 
-    #tableDeleteButton:hover {{
-        background: #B91C1C;
+    #splitButton, #cancelButton {{
+        min-height: 48px;
+    }}
+    
+    #tableDeleteIconButton {{
+        background: transparent;
+        border: none;
+        color: #DC2626;
+        font-size: 15px;
+        font-weight: 900;
+        padding: 0;
+        margin-left: -12px;
+        margin-top: 5px;
+    }}
+
+    #tableDeleteIconButton:hover {{
+        background: #FEF2F2;
+        border-radius: 14px;
+        color: #B91C1C;
     }}
 
     #dialogTotalLabel {{
@@ -1515,12 +1679,31 @@ def build_stylesheet() -> str:
     #paymentDialogPanel {{
         background: #FFFFFF;
         border: 1px solid {BORDER};
-        border-radius: 10px;
+        border-radius: 14px;
+    }}
+
+    #paymentDialogTitle {{
+        color: {TEXT_DARK};
+        font-size: 22px;
+        font-weight: 800;
+    }}
+
+    #paymentDialogSubtitle {{
+        color: {TEXT_MUTED};
+        font-size: 12px;
+        font-weight: 600;
+    }}
+
+    #paymentFieldLabel {{
+        color: {TEXT_MUTED};
+        font-size: 12px;
+        font-weight: 800;
+        text-transform: uppercase;
     }}
 
     #paymentGrandTotal {{
         color: {TEXT_DARK};
-        font-size: 30px;
+        font-size: 32px;
         font-weight: 800;
     }}
 
@@ -1531,22 +1714,22 @@ def build_stylesheet() -> str:
     }}
 
     #paymentChangeValue {{
-        color: {ACCENT_GREEN};
-        font-size: 24px;
+        color: {ACCENT_BLUE};
+        font-size: 26px;
         font-weight: 800;
     }}
 
     QRadioButton {{
         background: #FFFFFF;
         border: 1px solid {BORDER};
-        border-radius: 8px;
+        border-radius: 10px;
         font-weight: 700;
-        padding: 12px;
+        padding: 14px;
     }}
 
     QRadioButton:checked {{
-        border-color: {ACCENT_GREEN};
-        color: {ACCENT_GREEN};
+        border-color: {ACCENT_BLUE};
+        color: {ACCENT_BLUE};
     }}
 
     #primaryDialogButton {{
@@ -1555,7 +1738,8 @@ def build_stylesheet() -> str:
         border-radius: 8px;
         color: #FFFFFF;
         font-weight: 700;
-        padding: 9px 16px;
+        min-width: 140px;
+        padding: 11px 18px;
     }}
 
     #neutralDialogButton {{
@@ -1564,7 +1748,8 @@ def build_stylesheet() -> str:
         border-radius: 8px;
         color: {TEXT_DARK};
         font-weight: 700;
-        padding: 9px 16px;
+        min-width: 120px;
+        padding: 11px 18px;
     }}
     """
 
