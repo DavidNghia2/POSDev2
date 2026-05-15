@@ -125,6 +125,13 @@ class ProductManagementWindow(QWidget):
         barcode_label.setObjectName("fieldSectionLabel")
         barcode_section.addWidget(barcode_label)
 
+        barcode_rules = QLabel(
+            "Rule: barcodes belong to this product. The first barcode is primary; POS can scan any barcode."
+        )
+        barcode_rules.setObjectName("barcodeRules")
+        barcode_rules.setWordWrap(True)
+        barcode_section.addWidget(barcode_rules)
+
         barcode_input_row = QHBoxLayout()
         barcode_input_row.setSpacing(8)
 
@@ -326,7 +333,7 @@ class ProductManagementWindow(QWidget):
         self.render_barcode_list()
 
     def add_product(self) -> None:
-        form_data = self.get_form_data()
+        form_data = self.get_form_data(include_pending_barcode=True)
         if form_data is None:
             return
 
@@ -345,7 +352,7 @@ class ProductManagementWindow(QWidget):
             self.show_error("Please select a product to update.")
             return
 
-        form_data = self.get_form_data()
+        form_data = self.get_form_data(include_pending_barcode=True)
         if form_data is None:
             return
 
@@ -379,10 +386,17 @@ class ProductManagementWindow(QWidget):
         self.load_products()
         self.data_changed.emit()
 
-    def get_form_data(self) -> tuple[str, float, str, bool, str, list[str]] | None:
+    def get_form_data(
+        self,
+        include_pending_barcode: bool = False,
+    ) -> tuple[str, float, str, bool, str, list[str]] | None:
         pending_barcode = self.barcode_input.text().strip()
-        if pending_barcode and not self.add_barcode(pending_barcode):
-            return None
+        barcodes = list(self.barcodes)
+        if include_pending_barcode and pending_barcode:
+            clean_barcode = pending_barcode.strip()
+            if not self.can_add_barcode(clean_barcode):
+                return None
+            barcodes.append(clean_barcode)
 
         name = self.name_input.text().strip()
         price_text = self.price_input.text().strip()
@@ -401,7 +415,7 @@ class ProductManagementWindow(QWidget):
             self.show_error("Please enter a valid price.")
             return None
 
-        return name, price, category, requires_weight, self.image_path, list(self.barcodes)
+        return name, price, category, requires_weight, self.image_path, barcodes
 
     def choose_image(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -416,23 +430,78 @@ class ProductManagementWindow(QWidget):
         self.update_image_preview()
 
     def add_barcode_from_input(self) -> None:
-        self.add_barcode(self.barcode_input.text().strip())
+        if not self.add_barcode(self.barcode_input.text().strip()):
+            return
+        if self.selected_product_id is not None:
+            self.save_selected_product_changes(clear_form_after_save=False)
 
     def add_barcode(self, barcode: str) -> bool:
         clean_barcode = barcode.strip()
         if not clean_barcode:
             return True
-        if clean_barcode in self.barcodes:
-            self.show_error("This barcode is already in the list.")
+        if not self.can_add_barcode(clean_barcode):
             return False
         self.barcodes.append(clean_barcode)
         self.barcode_input.clear()
         self.render_barcode_list()
         return True
 
+    def can_add_barcode(self, barcode: str) -> bool:
+        clean_barcode = barcode.strip()
+        if clean_barcode in self.barcodes:
+            self.show_error("This barcode is already in the list.")
+            return False
+        if db.barcode_exists(clean_barcode, self.selected_product_id):
+            self.show_error("This barcode is already assigned to another product.")
+            return False
+        return True
+
     def remove_barcode(self, barcode: str) -> None:
+        previous_barcodes = list(self.barcodes)
         self.barcodes = [item for item in self.barcodes if item != barcode]
         self.render_barcode_list()
+        if self.selected_product_id is not None and not self.save_selected_product_changes(
+            clear_form_after_save=False
+        ):
+            self.barcodes = previous_barcodes
+            self.render_barcode_list()
+
+    def save_selected_product_changes(self, clear_form_after_save: bool) -> bool:
+        if self.selected_product_id is None:
+            return False
+
+        form_data = self.get_form_data(include_pending_barcode=False)
+        if form_data is None:
+            return False
+
+        try:
+            db.update_product(self.selected_product_id, *form_data)
+        except sqlite3.IntegrityError:
+            self.show_error("A product with one of these barcodes already exists.")
+            return False
+
+        saved_product_id = self.selected_product_id
+        if clear_form_after_save:
+            self.clear_form()
+        else:
+            self.load_products()
+            self.select_product_in_table(saved_product_id)
+        self.data_changed.emit()
+        self.show_status("Barcode list saved to selected product.")
+        return True
+
+    def select_product_in_table(self, product_id: int) -> None:
+        for row in range(self.products_table.rowCount()):
+            item = self.products_table.item(row, 0)
+            if item is not None and item.data(Qt.ItemDataRole.UserRole) == product_id:
+                self.products_table.setCurrentCell(row, 0)
+                self.products_table.selectRow(row)
+                return
+
+    def show_status(self, message: str) -> None:
+        status_bar = getattr(self.window(), "statusBar", None)
+        if callable(status_bar):
+            status_bar().showMessage(message, 2500)
 
     def render_barcode_list(self) -> None:
         while self.barcode_list_layout.count():
@@ -462,6 +531,9 @@ class ProductManagementWindow(QWidget):
         label.setObjectName("barcodeValue")
         label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
+        variant_label = QLabel("Primary" if self.barcodes.index(barcode) == 0 else "Linked")
+        variant_label.setObjectName("barcodeVariant")
+
         delete_button = QPushButton("X")
         delete_button.setObjectName("barcodeDeleteButton")
         delete_button.setToolTip("Remove barcode")
@@ -469,6 +541,7 @@ class ProductManagementWindow(QWidget):
         delete_button.clicked.connect(lambda _checked=False, value=barcode: self.remove_barcode(value))
 
         row_layout.addWidget(label, 1)
+        row_layout.addWidget(variant_label)
         row_layout.addWidget(delete_button)
         return row
 
@@ -572,6 +645,16 @@ class ProductManagementWindow(QWidget):
                 font-weight: 700;
             }
 
+            #barcodeRules {
+                background: #F0F7FF;
+                border: 1px solid #CFE3FF;
+                border-radius: 8px;
+                color: #32506D;
+                font-size: 11px;
+                font-weight: 600;
+                padding: 8px 10px;
+            }
+
             #panel {
                 background: #FFFFFF;
                 border: 1px solid #D8E0E8;
@@ -611,6 +694,16 @@ class ProductManagementWindow(QWidget):
             #barcodeValue {
                 color: #25313D;
                 font-weight: 700;
+            }
+
+            #barcodeVariant {
+                background: #EAF4FE;
+                border: 1px solid #CFE3FF;
+                border-radius: 6px;
+                color: #2563EB;
+                font-size: 11px;
+                font-weight: 800;
+                padding: 3px 7px;
             }
 
             #emptyBarcodeLabel {

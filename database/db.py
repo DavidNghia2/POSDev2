@@ -283,6 +283,40 @@ def get_product_by_barcode(barcode: str) -> dict[str, Any] | None:
         )
 
 
+def barcode_exists(barcode: str, exclude_product_id: int | None = None) -> bool:
+    init_db()
+    clean_barcode = barcode.strip()
+    if not clean_barcode:
+        return False
+
+    with get_connection() as connection:
+        if exclude_product_id is None:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM products p
+                LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+                WHERE p.active = 1 AND (p.barcode = ? OR pb.barcode = ?)
+                LIMIT 1
+                """,
+                (clean_barcode, clean_barcode),
+            ).fetchone()
+        else:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM products p
+                LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+                WHERE p.active = 1
+                  AND p.id <> ?
+                  AND (p.barcode = ? OR pb.barcode = ?)
+                LIMIT 1
+                """,
+                (exclude_product_id, clean_barcode, clean_barcode),
+            ).fetchone()
+        return row is not None
+
+
 def add_product(
     name: str,
     price: float,
