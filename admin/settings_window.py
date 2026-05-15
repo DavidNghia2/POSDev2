@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
 )
 
 from login import get_setting, log_audit, set_setting
+from ui.icon_manager import IconManager
 
 
 class SettingsWindow(QWidget):
@@ -36,8 +37,7 @@ class SettingsWindow(QWidget):
         title_block = QVBoxLayout()
         title_block.setSpacing(4)
         
-        title_label = QLabel("Settings")
-        title_label.setObjectName("titleLabel")
+        title_label = IconManager.label("Settings", "settings", "titleLabel", icon_size=20)
         
         subtitle_label = QLabel("System configuration")
         subtitle_label.setObjectName("subtitleLabel")
@@ -73,8 +73,7 @@ class SettingsWindow(QWidget):
         layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(16)
         
-        section_label = QLabel("Store Information")
-        section_label.setObjectName("sectionLabel")
+        section_label = IconManager.label("Store Information", "store", "sectionLabel")
         layout.addWidget(section_label)
         
         form_layout = QVBoxLayout()
@@ -120,6 +119,7 @@ class SettingsWindow(QWidget):
         
         # Save button
         self.save_store_button = QPushButton("Save Store Info")
+        IconManager.apply_button(self.save_store_button, "save", IconManager.LIGHT)
         self.save_store_button.setObjectName("primaryButton")
         self.save_store_button.clicked.connect(self.save_store_settings)
         
@@ -136,8 +136,7 @@ class SettingsWindow(QWidget):
         layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(16)
         
-        section_label = QLabel("Other Settings")
-        section_label.setObjectName("sectionLabel")
+        section_label = IconManager.label("Other Settings", "settings", "sectionLabel")
         layout.addWidget(section_label)
         
         form_layout = QVBoxLayout()
@@ -202,6 +201,7 @@ class SettingsWindow(QWidget):
         
         # Save button
         self.save_other_button = QPushButton("Save Other Settings")
+        IconManager.apply_button(self.save_other_button, "save", IconManager.LIGHT)
         self.save_other_button.setObjectName("secondaryButton")
         self.save_other_button.clicked.connect(self.save_other_settings)
         

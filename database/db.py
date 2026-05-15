@@ -181,6 +181,231 @@ def fetch_product_barcodes(connection: sqlite3.Connection, product_id: int) -> l
     return [str(row["barcode"]) for row in rows]
 
 
+def get_available_stock(product_id: int) -> float:
+    """Return sellable stock using explicit stock when present, otherwise remaining barcodes."""
+    init_db()
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT stock_qty
+            FROM products
+            WHERE active = 1 AND id = ?
+            LIMIT 1
+            """,
+            (product_id,),
+        ).fetchone()
+        if row is None:
+            return 0.0
+
+        stock_qty = float(row["stock_qty"] or 0)
+        if stock_qty > 0:
+            return stock_qty
+
+        barcode_row = connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM product_barcodes
+            WHERE product_id = ?
+            """,
+            (product_id,),
+        ).fetchone()
+        return float(barcode_row["count"] if barcode_row else 0)
+
+
+def is_barcode_available(barcode: str) -> bool:
+    init_db()
+    clean_barcode = barcode.strip()
+    if not clean_barcode:
+        return False
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM products p
+            LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+            WHERE p.active = 1 AND (p.barcode = ? OR pb.barcode = ?)
+            LIMIT 1
+            """,
+            (clean_barcode, clean_barcode),
+        ).fetchone()
+        return row is not None
+
+
+def was_barcode_sold(barcode: str) -> bool:
+    init_db()
+    clean_barcode = barcode.strip()
+    if not clean_barcode:
+        return False
+
+    with get_connection() as connection:
+        row = connection.execute(
+            """
+            SELECT 1
+            FROM sale_items si
+            JOIN sales s ON s.id = si.sale_id
+            WHERE si.barcode = ? AND s.status = 'completed'
+            LIMIT 1
+            """,
+            (clean_barcode,),
+        ).fetchone()
+        return row is not None
+
+
+def remove_sold_barcodes(connection: sqlite3.Connection, sale_items: list[dict[str, Any]]) -> None:
+    """Remove scanned barcodes after a completed sale and keep primary barcode in sync."""
+    affected_product_ids: set[int] = set()
+
+    for item in sale_items:
+        barcode = normalize_barcode(str(item.get("barcode") or ""))
+        if barcode is None:
+            continue
+
+        product_id = item.get("product_id")
+        if product_id is None:
+            row = connection.execute(
+                """
+                SELECT p.id
+                FROM products p
+                LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+                WHERE p.active = 1 AND (p.barcode = ? OR pb.barcode = ?)
+                LIMIT 1
+                """,
+                (barcode, barcode),
+            ).fetchone()
+            if row is None:
+                continue
+            product_id = int(row["id"])
+        else:
+            product_id = int(product_id)
+
+        connection.execute(
+            "DELETE FROM product_barcodes WHERE product_id = ? AND barcode = ?",
+            (product_id, barcode),
+        )
+        connection.execute(
+            """
+            UPDATE products
+            SET barcode = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND barcode = ?
+            """,
+            (product_id, barcode),
+        )
+        affected_product_ids.add(product_id)
+
+    for product_id in affected_product_ids:
+        remaining_barcodes = fetch_product_barcodes(connection, product_id)
+        next_primary = remaining_barcodes[0] if remaining_barcodes else None
+        connection.execute(
+            """
+            UPDATE products
+            SET barcode = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (next_primary, product_id),
+        )
+        connection.execute(
+            "UPDATE product_barcodes SET is_primary = 0 WHERE product_id = ?",
+            (product_id,),
+        )
+        if next_primary is not None:
+            connection.execute(
+                """
+                UPDATE product_barcodes
+                SET is_primary = 1
+                WHERE product_id = ? AND barcode = ?
+                """,
+                (product_id, next_primary),
+            )
+
+
+def get_available_stock_with_connection(connection: sqlite3.Connection, product_id: int) -> float:
+    row = connection.execute(
+        """
+        SELECT stock_qty
+        FROM products
+        WHERE active = 1 AND id = ?
+        LIMIT 1
+        """,
+        (product_id,),
+    ).fetchone()
+    if row is None:
+        return 0.0
+
+    stock_qty = float(row["stock_qty"] or 0)
+    if stock_qty > 0:
+        return stock_qty
+
+    barcode_row = connection.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM product_barcodes
+        WHERE product_id = ?
+        """,
+        (product_id,),
+    ).fetchone()
+    return float(barcode_row["count"] if barcode_row else 0)
+
+
+def ensure_sale_items_available(connection: sqlite3.Connection, sale_items: list[dict[str, Any]]) -> None:
+    requested_by_product: dict[int, float] = {}
+
+    for item in sale_items:
+        product_id = item.get("product_id")
+        barcode = normalize_barcode(str(item.get("barcode") or ""))
+
+        if barcode is not None:
+            row = connection.execute(
+                """
+                SELECT 1
+                FROM products p
+                LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+                WHERE p.active = 1 AND (p.barcode = ? OR pb.barcode = ?)
+                LIMIT 1
+                """,
+                (barcode, barcode),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Barcode {barcode} is no longer available in inventory.")
+
+        if product_id is None:
+            continue
+
+        requested_by_product[int(product_id)] = requested_by_product.get(int(product_id), 0.0) + float(
+            item.get("qty") or 0
+        )
+
+    for product_id, requested_qty in requested_by_product.items():
+        available_qty = get_available_stock_with_connection(connection, product_id)
+        if requested_qty > available_qty:
+            raise ValueError(
+                f"Insufficient stock for product #{product_id}: requested {requested_qty:g}, available {available_qty:g}."
+            )
+
+
+def reduce_explicit_stock(connection: sqlite3.Connection, sale_items: list[dict[str, Any]]) -> None:
+    sold_by_product: dict[int, float] = {}
+    for item in sale_items:
+        product_id = item.get("product_id")
+        if product_id is None:
+            continue
+        sold_by_product[int(product_id)] = sold_by_product.get(int(product_id), 0.0) + float(item.get("qty") or 0)
+
+    for product_id, sold_qty in sold_by_product.items():
+        connection.execute(
+            """
+            UPDATE products
+            SET stock_qty = CASE
+                WHEN COALESCE(stock_qty, 0) > 0 THEN MAX(COALESCE(stock_qty, 0) - ?, 0)
+                ELSE stock_qty
+            END,
+            updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (sold_qty, product_id),
+        )
+
+
 def product_row_to_dict(
     row: sqlite3.Row,
     barcodes: list[str] | None = None,
@@ -200,7 +425,7 @@ def get_all_products() -> list[dict[str, Any]]:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT id, barcode, name, price, category, requires_weight, image_path
+            SELECT id, barcode, name, price, category, stock_qty, requires_weight, image_path
             FROM products
             WHERE active = 1
             ORDER BY id DESC
@@ -223,7 +448,7 @@ def search_products(keyword: str) -> list[dict[str, Any]]:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT DISTINCT p.id, p.barcode, p.name, p.price, p.category, p.requires_weight, p.image_path
+            SELECT DISTINCT p.id, p.barcode, p.name, p.price, p.category, p.stock_qty, p.requires_weight, p.image_path
             FROM products p
             LEFT JOIN product_barcodes pb ON pb.product_id = p.id
             WHERE p.active = 1
@@ -244,7 +469,7 @@ def get_product_by_id(product_id: int) -> dict[str, Any] | None:
     with get_connection() as connection:
         row = connection.execute(
             """
-            SELECT id, barcode, name, price, category, requires_weight, image_path
+            SELECT id, barcode, name, price, category, stock_qty, requires_weight, image_path
             FROM products
             WHERE active = 1 AND id = ?
             LIMIT 1
@@ -265,7 +490,7 @@ def get_product_by_barcode(barcode: str) -> dict[str, Any] | None:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT p.id, p.barcode, p.name, p.price, p.category, p.requires_weight, p.image_path
+            SELECT p.id, p.barcode, p.name, p.price, p.category, p.stock_qty, p.requires_weight, p.image_path
             FROM products p
             LEFT JOIN product_barcodes pb ON pb.product_id = p.id
             WHERE p.active = 1 AND (p.barcode = ? OR pb.barcode = ?)
@@ -448,6 +673,7 @@ def create_sale(
 ) -> int:
     init_db()
     with get_connection() as connection:
+        ensure_sale_items_available(connection, sale_items)
         cursor = connection.execute(
             """
             INSERT INTO sales (
@@ -486,6 +712,8 @@ def create_sale(
                 for item in sale_items
             ],
         )
+        remove_sold_barcodes(connection, sale_items)
+        reduce_explicit_stock(connection, sale_items)
         payment_rows = payments or [{"method": payment_method, "amount": total_amount}]
         connection.executemany(
             """

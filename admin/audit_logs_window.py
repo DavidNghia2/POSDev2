@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from login import get_audit_logs
+from ui.icon_manager import IconManager
 
 
 def row_value(row, key: str, default: str = ""):
@@ -41,8 +42,7 @@ class AuditLogsWindow(QWidget):
         title_block = QVBoxLayout()
         title_block.setSpacing(4)
         
-        title_label = QLabel("Audit Logs")
-        title_label.setObjectName("titleLabel")
+        title_label = IconManager.label("Audit Logs", "audit_logs", "titleLabel", icon_size=20)
         
         subtitle_label = QLabel("System activity and user actions")
         subtitle_label.setObjectName("subtitleLabel")
@@ -54,7 +54,8 @@ class AuditLogsWindow(QWidget):
         header_layout.addStretch()
         
         # Refresh button
-        self.refresh_button = QPushButton("🔄 Refresh")
+        self.refresh_button = QPushButton("Refresh")
+        IconManager.apply_button(self.refresh_button, "refresh", IconManager.LIGHT)
         self.refresh_button.setObjectName("refreshButton")
         self.refresh_button.clicked.connect(self.load_logs)
         header_layout.addWidget(self.refresh_button)

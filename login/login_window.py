@@ -3,7 +3,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QPropertyAnimation, QRectF, Qt, pyqtProperty
+from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from ui.icon_manager import IconManager
 
 
 DB_PATH = Path(__file__).resolve().parents[1] / "pos.db"
@@ -251,6 +253,21 @@ def get_user_by_username(username: str) -> sqlite3.Row | None:
         return cursor.fetchone()
 
 
+def get_user_by_id(user_id: int) -> sqlite3.Row | None:
+    init_auth_db()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT u.id, u.username, u.password_hash, u.full_name, u.role_id, r.name as role_name, r.permissions
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.id = ? AND u.active = 1
+            """,
+            (user_id,),
+        )
+        return cursor.fetchone()
+
+
 def verify_password(plain_password: str, stored_password: str) -> bool:
     if stored_password.startswith("sha256$"):
         return hash_password(plain_password) == stored_password
@@ -467,6 +484,46 @@ def set_setting(key: str, value: str) -> None:
         connection.commit()
 
 
+def build_user_payload(user: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": user["id"],
+        "username": user["username"],
+        "full_name": user["full_name"],
+        "role_id": user["role_id"],
+        "role_name": user["role_name"],
+        "permissions": user["permissions"],
+    }
+
+
+def save_session(user_id: int) -> None:
+    set_setting("session_user_id", str(user_id))
+
+
+def clear_session() -> None:
+    init_auth_db()
+    with get_connection() as connection:
+        connection.execute("DELETE FROM settings WHERE key = 'session_user_id'")
+        connection.commit()
+
+
+def get_persisted_user() -> dict[str, Any] | None:
+    user_id_text = get_setting("session_user_id")
+    if not user_id_text:
+        return None
+
+    try:
+        user_id = int(user_id_text)
+    except ValueError:
+        clear_session()
+        return None
+
+    user = get_user_by_id(user_id)
+    if user is None:
+        clear_session()
+        return None
+    return build_user_payload(user)
+
+
 class PosIllustration(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -548,154 +605,6 @@ class PosIllustration(QWidget):
             painter.drawRoundedRect(QRectF(x, h * 0.62, w * 0.075, h * 0.13), 6, 6)
             painter.setBrush(QColor("#FFFFFF"))
             painter.drawRoundedRect(QRectF(x + 8, h * 0.65, w * 0.04, h * 0.018), 2, 2)
-
-
-class LineIcon(QWidget):
-    def __init__(self, kind: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.kind = kind
-        self.setFixedSize(26, 26)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._hover_progress = 0.0
-        self.hover_animation = QPropertyAnimation(self, b"hoverProgress", self)
-        self.hover_animation.setDuration(140)
-
-    def get_hover_progress(self) -> float:
-        return self._hover_progress
-
-    def set_hover_progress(self, value: float) -> None:
-        self._hover_progress = value
-        self.update()
-
-    hoverProgress = pyqtProperty(float, get_hover_progress, set_hover_progress)
-
-    def enterEvent(self, event) -> None:
-        self.hover_animation.stop()
-        self.hover_animation.setStartValue(self._hover_progress)
-        self.hover_animation.setEndValue(1.0)
-        self.hover_animation.start()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.hover_animation.stop()
-        self.hover_animation.setStartValue(self._hover_progress)
-        self.hover_animation.setEndValue(0.0)
-        self.hover_animation.start()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._hover_progress:
-            highlight = QColor(37, 99, 235, int(28 + 42 * self._hover_progress))
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(highlight)
-            painter.drawEllipse(QRectF(1, 1, 24, 24))
-
-        base = QColor("#5B91BB")
-        active = QColor("#2563EB")
-        mix = self._hover_progress
-        icon_color = QColor(
-            int(base.red() + (active.red() - base.red()) * mix),
-            int(base.green() + (active.green() - base.green()) * mix),
-            int(base.blue() + (active.blue() - base.blue()) * mix),
-        )
-        pen = QPen(icon_color, 2)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        if self.kind == "user":
-            painter.drawEllipse(QRectF(9, 4, 8, 8))
-            path = QPainterPath()
-            path.moveTo(5, 22)
-            path.cubicTo(6, 15, 20, 15, 21, 22)
-            painter.drawPath(path)
-            return
-
-        if self.kind == "lock":
-            painter.drawRoundedRect(QRectF(6, 11, 14, 11), 2, 2)
-            path = QPainterPath()
-            path.moveTo(9, 11)
-            path.lineTo(9, 8)
-            path.cubicTo(9, 3, 17, 3, 17, 8)
-            path.lineTo(17, 11)
-            painter.drawPath(path)
-            painter.drawLine(13, 15, 13, 18)
-            return
-
-        if self.kind == "role":
-            painter.drawRoundedRect(QRectF(5, 6, 16, 14), 3, 3)
-            painter.drawLine(9, 11, 17, 11)
-            painter.drawLine(9, 15, 15, 15)
-            painter.drawEllipse(QRectF(8, 2, 10, 7))
-            return
-
-
-class IconButton(QPushButton):
-    def __init__(self, kind: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.kind = kind
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setText("")
-        self._hover_progress = 0.0
-        self.hover_animation = QPropertyAnimation(self, b"hoverProgress", self)
-        self.hover_animation.setDuration(140)
-
-    def get_hover_progress(self) -> float:
-        return self._hover_progress
-
-    def set_hover_progress(self, value: float) -> None:
-        self._hover_progress = value
-        self.update()
-
-    hoverProgress = pyqtProperty(float, get_hover_progress, set_hover_progress)
-
-    def enterEvent(self, event) -> None:
-        self.hover_animation.stop()
-        self.hover_animation.setStartValue(self._hover_progress)
-        self.hover_animation.setEndValue(1.0)
-        self.hover_animation.start()
-        super().enterEvent(event)
-
-    def leaveEvent(self, event) -> None:
-        self.hover_animation.stop()
-        self.hover_animation.setStartValue(self._hover_progress)
-        self.hover_animation.setEndValue(0.0)
-        self.hover_animation.start()
-        super().leaveEvent(event)
-
-    def paintEvent(self, event) -> None:
-        super().paintEvent(event)
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        if self._hover_progress:
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(37, 99, 235, int(24 + 36 * self._hover_progress)))
-            painter.drawRoundedRect(QRectF(3, 3, self.width() - 6, self.height() - 6), 8, 8)
-
-        pen = QPen(QColor("#2563EB"), 2)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        painter.setPen(pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-
-        rect = self.rect()
-        cx = rect.width() / 2
-        cy = rect.height() / 2
-
-        if self.kind == "eye":
-            eye_path = QPainterPath()
-            eye_path.moveTo(cx - 11, cy)
-            eye_path.cubicTo(cx - 6, cy - 7, cx + 6, cy - 7, cx + 11, cy)
-            eye_path.cubicTo(cx + 6, cy + 7, cx - 6, cy + 7, cx - 11, cy)
-            painter.drawPath(eye_path)
-            painter.drawEllipse(QRectF(cx - 3, cy - 3, 6, 6))
-            if self.isChecked():
-                painter.drawLine(int(cx - 11), int(cy + 9), int(cx + 11), int(cy - 9))
-            return
 
 
 class ToggleSwitch(QPushButton):
@@ -786,8 +695,7 @@ class LoginWindow(QDialog):
         card_layout.setContentsMargins(34, 32, 34, 26)
         card_layout.setSpacing(11)
 
-        login_title = QLabel("Login")
-        login_title.setObjectName("loginTitle")
+        login_title = IconManager.label("Login", "login", "loginTitle", icon_size=22)
         card_layout.addWidget(login_title)
         card_layout.addSpacing(10)
 
@@ -797,7 +705,7 @@ class LoginWindow(QDialog):
         username_layout = QHBoxLayout(username_row)
         username_layout.setContentsMargins(14, 0, 14, 0)
         username_layout.setSpacing(10)
-        username_icon = LineIcon("user")
+        username_icon = self.create_inline_icon_label("user")
         username_separator = QFrame()
         username_separator.setObjectName("iconSeparator")
         username_separator.setFixedWidth(1)
@@ -814,7 +722,7 @@ class LoginWindow(QDialog):
         password_layout = QHBoxLayout(password_row)
         password_layout.setContentsMargins(14, 0, 14, 0)
         password_layout.setSpacing(10)
-        password_icon = LineIcon("lock")
+        password_icon = self.create_inline_icon_label("lock")
         password_separator = QFrame()
         password_separator.setObjectName("iconSeparator")
         password_separator.setFixedWidth(1)
@@ -823,10 +731,11 @@ class LoginWindow(QDialog):
         self.password_input.setPlaceholderText("Password")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.returnPressed.connect(self.handle_login)
-        self.password_toggle_button = IconButton("eye")
+        self.password_toggle_button = QPushButton()
         self.password_toggle_button.setObjectName("passwordToggleButton")
         self.password_toggle_button.setCheckable(True)
         self.password_toggle_button.setFixedSize(34, 34)
+        IconManager.apply_button(self.password_toggle_button, "eye")
         self.password_toggle_button.setToolTip("Show password")
         self.password_toggle_button.clicked.connect(self.toggle_password_visibility)
         password_layout.addWidget(password_icon)
@@ -842,7 +751,7 @@ class LoginWindow(QDialog):
         role_layout = QHBoxLayout(role_row)
         role_layout.setContentsMargins(14, 0, 14, 0)
         role_layout.setSpacing(10)
-        role_icon = LineIcon("role")
+        role_icon = self.create_inline_icon_label("role")
         role_separator = QFrame()
         role_separator.setObjectName("iconSeparator")
         role_separator.setFixedWidth(1)
@@ -864,12 +773,14 @@ class LoginWindow(QDialog):
         remember_label.setMinimumHeight(28)
         self.remember_checkbox = ToggleSwitch()
         self.remember_checkbox.setToolTip("Remember this login")
+        self.remember_checkbox.setChecked(get_setting("remember_login") != "false")
         remember_layout.addWidget(remember_label)
         remember_layout.addWidget(self.remember_checkbox)
         remember_layout.addStretch()
         card_layout.addLayout(remember_layout)
 
         self.login_button = QPushButton("Log in")
+        IconManager.apply_button(self.login_button, "login", IconManager.LIGHT)
         self.login_button.setObjectName("loginButton")
         self.login_button.setMinimumHeight(46)
         self.login_button.clicked.connect(self.handle_login)
@@ -892,6 +803,13 @@ class LoginWindow(QDialog):
         self.role_combo.clear()
         for role in get_all_roles():
             self.role_combo.addItem(role["name"], role["id"])
+
+    def create_inline_icon_label(self, icon_key: str) -> QLabel:
+        label = QLabel()
+        label.setPixmap(IconManager.pixmap(icon_key, 20))
+        label.setFixedSize(26, 26)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        return label
 
     def handle_login(self) -> None:
         username = self.username_input.text().strip()
@@ -919,14 +837,14 @@ class LoginWindow(QDialog):
             self.password_input.clear()
             return
         
-        self.current_user = {
-            "id": user["id"],
-            "username": user["username"],
-            "full_name": user["full_name"],
-            "role_id": user["role_id"],
-            "role_name": user["role_name"],
-            "permissions": user["permissions"],
-        }
+        self.current_user = build_user_payload(user)
+
+        remember_login = self.remember_checkbox.isChecked()
+        set_setting("remember_login", "true" if remember_login else "false")
+        if remember_login:
+            save_session(int(user["id"]))
+        else:
+            clear_session()
         
         log_audit(user["id"], "LOGIN")
         self.accept()
@@ -934,10 +852,12 @@ class LoginWindow(QDialog):
     def toggle_password_visibility(self) -> None:
         if self.password_toggle_button.isChecked():
             self.password_input.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.password_toggle_button.setIcon(IconManager.icon("eye_off"))
             self.password_toggle_button.setToolTip("Hide password")
             return
 
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password_toggle_button.setIcon(IconManager.icon("eye"))
         self.password_toggle_button.setToolTip("Show password")
 
     def get_user(self) -> dict[str, Any] | None:

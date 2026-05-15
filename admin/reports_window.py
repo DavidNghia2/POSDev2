@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from ui.icon_manager import IconManager
 
 
 def get_sales_report(start_date: str, end_date: str) -> list:
@@ -148,8 +149,7 @@ class ReportsWindow(QWidget):
         title_block = QVBoxLayout()
         title_block.setSpacing(4)
         
-        title_label = QLabel("Reports")
-        title_label.setObjectName("titleLabel")
+        title_label = IconManager.label("Reports", "reports", "titleLabel", icon_size=20)
         
         subtitle_label = QLabel("Sales and transaction reports")
         subtitle_label.setObjectName("subtitleLabel")
@@ -203,16 +203,19 @@ class ReportsWindow(QWidget):
         filters_layout.addStretch()
         
         self.today_button = QPushButton("Today")
+        IconManager.apply_button(self.today_button, "today")
         self.today_button.setObjectName("filterButton")
         self.today_button.clicked.connect(lambda: self.set_date_range("today"))
         filters_layout.addWidget(self.today_button)
         
         self.week_button = QPushButton("This Week")
+        IconManager.apply_button(self.week_button, "week")
         self.week_button.setObjectName("filterButton")
         self.week_button.clicked.connect(lambda: self.set_date_range("week"))
         filters_layout.addWidget(self.week_button)
         
         self.month_button = QPushButton("This Month")
+        IconManager.apply_button(self.month_button, "month")
         self.month_button.setObjectName("filterButton")
         self.month_button.clicked.connect(lambda: self.set_date_range("month"))
         filters_layout.addWidget(self.month_button)

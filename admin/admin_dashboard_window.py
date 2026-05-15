@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from ui.icon_manager import IconManager
 
 
 def get_sales_summary(start_date: str, end_date: str) -> dict:
@@ -170,7 +171,14 @@ def clear_layout_item(item: QLayoutItem) -> None:
 
 
 class StatCard(QFrame):
-    def __init__(self, title: str, value: str, icon: str = "", subtitle: str = "", parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        value: str,
+        icon_key: str = "",
+        subtitle: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("statCard")
         
@@ -181,9 +189,11 @@ class StatCard(QFrame):
         header = QHBoxLayout()
         header.setSpacing(10)
         
-        if icon:
-            icon_label = QLabel(icon)
+        if icon_key:
+            icon_label = QLabel()
             icon_label.setObjectName("statIcon")
+            icon_label.setPixmap(IconManager.pixmap(icon_key, 18))
+            icon_label.setFixedSize(18, 18)
             header.addWidget(icon_label)
         
         title_label = QLabel(title)
@@ -228,8 +238,7 @@ class AdminDashboardWindow(QWidget):
         title_block = QVBoxLayout()
         title_block.setSpacing(4)
         
-        title_label = QLabel("Admin Dashboard")
-        title_label.setObjectName("titleLabel")
+        title_label = IconManager.label("Admin Dashboard", "dashboard", "titleLabel", icon_size=20)
         
         subtitle_label = QLabel("Overview and statistics")
         subtitle_label.setObjectName("subtitleLabel")
@@ -269,10 +278,10 @@ class AdminDashboardWindow(QWidget):
         stats_layout = QHBoxLayout()
         stats_layout.setSpacing(16)
         
-        self.sales_count_card = StatCard("Total Sales", "0", "📊", "Number of transactions")
-        self.revenue_card = StatCard("Revenue", "$0.00", "💰", "Total sales amount")
-        self.items_sold_card = StatCard("Items Sold", "0", "📦", "Products sold")
-        self.avg_transaction_card = StatCard("Avg. Transaction", "$0.00", "📈", "Per sale")
+        self.sales_count_card = StatCard("Total Sales", "0", "sales", "Number of transactions")
+        self.revenue_card = StatCard("Revenue", "$0.00", "cash", "Total sales amount")
+        self.items_sold_card = StatCard("Items Sold", "0", "items", "Products sold")
+        self.avg_transaction_card = StatCard("Avg. Transaction", "$0.00", "average", "Per sale")
         
         stats_layout.addWidget(self.sales_count_card)
         stats_layout.addWidget(self.revenue_card)
@@ -293,8 +302,7 @@ class AdminDashboardWindow(QWidget):
         left_layout.setContentsMargins(22, 22, 22, 22)
         left_layout.setSpacing(14)
         
-        section_label = QLabel("Payment Methods")
-        section_label.setObjectName("sectionLabel")
+        section_label = IconManager.label("Payment Methods", "payment", "sectionLabel")
         left_layout.addWidget(section_label)
         
         self.payment_table = QVBoxLayout()
@@ -313,8 +321,7 @@ class AdminDashboardWindow(QWidget):
         right_layout.setContentsMargins(22, 22, 22, 22)
         right_layout.setSpacing(14)
         
-        section_label = QLabel("Top Selling Products")
-        section_label.setObjectName("sectionLabel")
+        section_label = IconManager.label("Top Selling Products", "products", "sectionLabel")
         right_layout.addWidget(section_label)
         
         self.top_products_layout = QVBoxLayout()

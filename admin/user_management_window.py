@@ -23,6 +23,7 @@ from login import (
     log_audit,
     update_user,
 )
+from ui.icon_manager import IconManager
 
 
 class UserManagementWindow(QWidget):
@@ -48,8 +49,7 @@ class UserManagementWindow(QWidget):
         title_block = QVBoxLayout()
         title_block.setSpacing(4)
         
-        title_label = QLabel("User Management")
-        title_label.setObjectName("titleLabel")
+        title_label = IconManager.label("User Management", "users", "titleLabel", icon_size=20)
         
         subtitle_label = QLabel("Manage users and access permissions")
         subtitle_label.setObjectName("subtitleLabel")
@@ -87,8 +87,7 @@ class UserManagementWindow(QWidget):
         layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(16)
         
-        section_label = QLabel("User Details")
-        section_label.setObjectName("sectionLabel")
+        section_label = IconManager.label("User Details", "user", "sectionLabel")
         layout.addWidget(section_label)
         
         form_layout = QVBoxLayout()
@@ -138,18 +137,22 @@ class UserManagementWindow(QWidget):
         button_layout.setSpacing(10)
         
         self.add_button = QPushButton("Add User")
+        IconManager.apply_button(self.add_button, "add", IconManager.LIGHT)
         self.add_button.setObjectName("primaryButton")
         self.add_button.clicked.connect(self.add_user_action)
         
         self.update_button = QPushButton("Update User")
+        IconManager.apply_button(self.update_button, "edit", IconManager.LIGHT)
         self.update_button.setObjectName("secondaryButton")
         self.update_button.clicked.connect(self.update_user_action)
         
         self.delete_button = QPushButton("Delete User")
+        IconManager.apply_button(self.delete_button, "delete", IconManager.LIGHT)
         self.delete_button.setObjectName("dangerButton")
         self.delete_button.clicked.connect(self.delete_user_action)
         
         self.clear_button = QPushButton("Clear")
+        IconManager.apply_button(self.clear_button, "clear", IconManager.LIGHT)
         self.clear_button.setObjectName("neutralButton")
         self.clear_button.clicked.connect(self.clear_form)
         
@@ -171,8 +174,7 @@ class UserManagementWindow(QWidget):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
         
-        section_label = QLabel("Users")
-        section_label.setObjectName("sectionLabel")
+        section_label = IconManager.label("Users", "users", "sectionLabel")
         layout.addWidget(section_label)
         
         # Search

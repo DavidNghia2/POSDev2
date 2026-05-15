@@ -1,107 +1,93 @@
 TIEN DO DU AN POS DESKTOP
-Cap nhat gan nhat: 2026-05-13
+Cap nhat gan nhat: 2026-05-16
 
 1. Trang thai hien tai
 - Du an la ung dung POS desktop viet bang Python + PyQt6.
-- App chay theo mo hinh mot cua so chinh PosMainWindow, noi dung doi bang QStackedWidget.
-- Sidebar ben trai dieu huong giua POS Terminal, Product Management, dashboard va cac trang admin theo quyen.
-- Database dung SQLite built-in cua Python thong qua sqlite3.
-- File database runtime chinh la pos.db nam o thu muc goc project.
-- POS Terminal doc products de ban hang va luu giao dich vao sales, sale_items, sale_payments.
-- Product Management quan ly products.
-- Admin pages hien co: dashboard, user management, register management, reports, audit logs, settings.
-- Global synchronization da duoc them bang pyqtSignal de cac trang reload data sau khi DB thay doi.
+- App dung mot cua so chinh PosMainWindow va dieu huong noi dung bang QStackedWidget.
+- Sidebar ben trai hien cac khu vuc theo quyen: dashboard, POS Terminal, Product Management va cac trang admin.
+- Database runtime la SQLite, file chinh: pos.db.
+- App hien co cac nhom chuc nang:
+  + Dang nhap, giu phien dang nhap, dang xuat.
+  + POS Terminal de ban hang, thanh toan, in/xem hoa don.
+  + Product Management de quan ly danh muc san pham.
+  + Admin: users, registers, reports, audit logs, settings.
+- Cac trang co the tu reload du lieu thong qua signal chung app_data_changed.
 
-2. Danh sach da sua gan day
-- Them app_data_changed = pyqtSignal() trong PosMainWindow.
-- Them notify_app_data_changed() de phat signal refresh toan app.
-- Them connect_global_refresh() de noi app_data_changed voi cac trang co ham reload/load data.
-- Them get_reload_handler() de tu dong tim ham reload phu hop cua tung page.
-- Them reload_data() trong PosMainWindow de reload product grid va refresh total.
-- Them shortcut Shift+F5 de ep reload data toan app.
-- Them data_changed = pyqtSignal() vao ProductManagementWindow.
-- Them reload_data() vao ProductManagementWindow.
-- Sau Add/Update/Delete Product se phat data_changed.
-- Them data_changed va reload_data vao UserManagementWindow.
-- Sau Add/Update/Delete User se phat data_changed.
-- Them data_changed va reload_data vao RegisterManagementWindow.
-- Sau Add/Update/Delete Register se phat data_changed.
-- Them data_changed va reload_data vao SettingsWindow.
-- Sau Save Store Settings va Save Other Settings se phat data_changed.
-- Sau Pay Cash va Split Payment thanh cong, POS phat global refresh de dashboard/report cap nhat.
-- Product card trong POS hien Barcode thay vi ID.
-- Nút xoa item trong cart la chu X mau do dang icon nhe.
-- Cart table da bat vertical scrollbar luon hien thi.
-- Cart table da tat horizontal scrollbar de tranh lech layout.
-- Cart table dung ScrollPerItem va scrollToBottom() sau khi populate.
-- Cart table duoc gioi han chieu cao min/max de khong che khu totals/action buttons.
-- Da them style scrollbar doc de nguoi dung thay ro co the keo xuong.
+2. Cac thay doi da sua / da bo sung
+- Chuc nang cu: Barcode van con sau khi ban.
+  Chuc nang moi: Barcode da ban bi xoa khoi Product Management va Database.
+  Da sua: Xoa barcode sau sale thanh cong; neu con barcode khac thi tu chon barcode tiep theo lam barcode chinh.
+
+- Chuc nang cu: Barcode da ban van co the quet lai va di tiep.
+  Chuc nang moi: Barcode het hang/da ban bi chan ngay.
+  Da sua: Them kiem tra khi quet, kiem tra lai truoc khi thanh toan, va them lop validate o database de khong ban lot khi ton kho thay doi.
+
+- Chuc nang cu: Gio hang gop cac barcode khac nhau cua cung san pham vao mot dong.
+  Chuc nang moi: Gio hang phan biet tung barcode da quet.
+  Da sua: Chuyen logic cart sang xu ly theo barcode de ban dung tung ma da quet.
+
+- Chuc nang cu: Shift + F5 chi refresh, khong co phan hoi giao dien.
+  Chuc nang moi: Reset co thong bao thanh cong.
+  Da sua: Them toast/animation "Reset successful" va status bar message.
+
+- Chuc nang cu: Dong app la phai dang nhap lai.
+  Chuc nang moi: Giu phien dang nhap sau khi tat app.
+  Da sua: Them session persistence; neu bat "Keep me logged in" thi mo app se vao lai tai khoan truoc do.
+
+- Chuc nang cu: Khong co nut dang xuat.
+  Chuc nang moi: Co nut Logout tren sidebar.
+  Da sua: Them nut Logout kem icon, xoa session va quay lai man hinh login.
+
+- Chuc nang cu: Hoa don co the hien truoc khi thanh toan hoan tat.
+  Chuc nang moi: Hoa don chi duoc tao/hien sau khi thanh toan thanh cong.
+  Da sua: Sua lai luong payment -> dialog accepted -> moi finalize payment va hien receipt.
+
+- Chuc nang cu: Product Management chia doi man hinh, form ben trai va bang ben phai.
+  Chuc nang moi: Product Management chi con man danh sach, thao tac them/sua bang popup modal.
+  Da sua: Bo panel Product Details ben trai, tao ProductDialog dung chung cho Add Product va Edit Product.
+
+- Chuc nang cu: Sua/xoa san pham phu thuoc vao form chung va dong dang chon.
+  Chuc nang moi: Moi dong trong bang co nut Edit va Delete rieng.
+  Da sua: Them action buttons theo tung dong, modal Edit tu dien du lieu cu, sau Save/Delete bang tu reload.
 
 3. Cau truc file chinh
 - main.py
-  Entry point chinh. Tao QApplication, cau hinh style/font, mo PosMainWindow.
+  Entry point chinh; tao QApplication, khoi tao auth DB, khoi phuc session neu co, mo PosMainWindow.
 
 - pos_terminal.py
-  Wrapper de van chay duoc lenh cu. File nay import main() tu main.py.
+  Wrapper de lenh chay cu van hoat dong.
 
-- requirements.txt
-  Dependency hien tai: PyQt6==6.7.1.
-
-- setup.ps1
-  Script PowerShell tao virtual environment, nang pip, cai requirements.
-
-- README_SETUP.md
-  Huong dan setup va chay app.
-
-- pos.db
-  SQLite database runtime dung chung cho app.
+- login/login_window.py
+  Dang nhap, verify user, session persistence, settings auth, cash shift helpers.
 
 - database/db.py
-  Database helper dung chung. Nen dat SQL va cac ham doc/ghi database o day.
+  Helper database chung: products, barcodes, sales, ton kho kha dung, validate sale, xoa barcode sau ban.
 
 - pos_terminal/pos_window.py
-  Main window, sidebar, QStackedWidget, POS Terminal, payment logic, receipt preview, global refresh signal.
+  Main window, sidebar, POS Terminal, cart, payment, receipt preview, reset toast, logout.
 
 - product_management/product_management_window.py
-  Product Management page, CRUD product, data_changed signal.
+  Product list page va ProductDialog modal cho Add/Edit Product.
 
-- admin/user_management_window.py
-  User Management page, CRUD user, data_changed signal.
+- admin/*
+  Dashboard, users, registers, reports, audit logs, settings.
 
-- admin/register_management_window.py
-  Register Management page, CRUD register, data_changed signal.
-
-- admin/settings_window.py
-  Settings page, save settings, data_changed signal.
-
-- admin/admin_dashboard_window.py
-  Admin Dashboard page. Co load_dashboard_data() de refresh so lieu.
-
-- admin/reports_window.py
-  Reports page. Co load_report() de refresh bao cao.
+- ui/icon_manager.py
+  Quan ly icon dung chung cho toan app.
 
 - Progress/tiến độ.txt
-  File tien do tieng Viet.
+  Tai lieu tien do tieng Viet.
 
 - Progress/POS DESKTOP PROJECT PROGRESS.txt
-  File tien do tieng Anh.
+  Tai lieu tien do tieng Anh.
 
-4. Global synchronization hien tai
+4. Dong bo du lieu toan app
 - PosMainWindow co signal chung:
   app_data_changed = pyqtSignal()
-
-- Cac page ghi DB co signal rieng:
-  + ProductManagementWindow.data_changed
-  + UserManagementWindow.data_changed
-  + RegisterManagementWindow.data_changed
-  + SettingsWindow.data_changed
-
-- Khi page con phat data_changed:
-  page.data_changed -> PosMainWindow.notify_app_data_changed() -> app_data_changed.emit()
-
-- PosMainWindow.connect_global_refresh() se noi app_data_changed den ham reload phu hop cua moi page.
-
-- Thu tu tim reload handler:
+- Cac trang ghi DB co the emit data_changed sau khi save/update/delete.
+- Luong refresh:
+  page.data_changed -> notify_app_data_changed() -> app_data_changed.emit()
+- MainWindow tu tim ham reload cua tung trang:
   + reload_data
   + load_dashboard_data
   + load_products
@@ -110,139 +96,130 @@ Cap nhat gan nhat: 2026-05-13
   + load_settings
   + load_report
   + load_logs
-
-- Shift+F5:
-  + Khi nhan Shift+F5, app goi notify_app_data_changed().
-  + Tat ca page da connect se reload data ma khong can restart app.
+- Shift + F5:
+  + Refresh du lieu toan app.
+  + Hien toast reset thanh cong.
 
 5. Database hien tai
-- database/db.py tao/migrate cac bang can thiet trong init_db().
-- Cac bang chinh dang co:
+- Cac bang chinh:
   + products
+  + product_barcodes
   + sales
   + sale_items
   + sale_payments
   + sync_queue
-- products co cac cot mo rong nhu sku, stock_qty, active, updated_at.
-- sales co user_id, register_id, shift_id, total_amount, payment_method, tendered_amount, change_amount, status, created_at.
-- sale_items co product_id, barcode, name, qty, price, subtotal.
-- sale_payments luu cac payment method cua 1 sale.
-- sync_queue phuc vu viec dong bo/offline sau nay.
+- products co cac truong nhu barcode, sku, stock_qty, active, updated_at, image_path.
+- product_barcodes luu nhieu barcode cho mot san pham, co is_primary.
+- sales va sale_items luu lich su giao dich.
+- Co them logic:
+  + get_available_stock()
+  + is_barcode_available()
+  + was_barcode_sold()
+  + ensure_sale_items_available()
+  + remove_sold_barcodes()
+- Hien tai app uu tien dung barcode con lai nhu ton kho kha dung; stock_qty da co trong schema nhung chua co man Inventory rieng de quan ly day du.
 
 6. POS Terminal hien tai
-- Layout POS co 3 khu:
-  + Sidebar ben trai.
+- Layout:
+  + Sidebar trai.
   + Product grid o giua.
   + Cart + totals + action buttons ben phai.
 - Product grid:
-  + Search/scan bar o tren.
-  + Product cards hien placeholder image, product name, barcode, price.
-  + Click product card de add vao cart.
-  + Nhan Enter trong search de tim theo barcode/name.
+  + Search/scan barcode.
+  + Card hien anh, ten, barcode, gia.
+  + Enter de tim theo barcode/name.
 - Cart:
-  + Columns: Name, Qty, Price, Total, X.
-  + Qty cho double-click de sua.
-  + Qty <= 0 thi xoa item.
-  + Nut X mau do de xoa item.
-  + Vertical scrollbar luon hien thi, co the keo xuong khi nhieu item.
-  + Khi add item moi, table scroll xuong duoi.
-- Totals:
-  + Subtotal
-  + Discount
-  + Grand Total
+  + Columns: Barcode, Name, Qty, Price, Total, Remove.
+  + Qty co the sua neu hop le.
+  + Barcode da quet khong duoc ban trung trong cung transaction.
+  + Gio hang kiem tra ton kho truoc khi thanh toan.
 - Actions:
   + Pay
   + Split Payment
   + Cancel
+- Sidebar:
+  + Co nut Logout.
 
-7. Payment hien tai
+7. Thanh toan va hoa don
 - Pay:
-  + Mo Payment QDialog.
-  + Ben trai hien Total Due, Amount Tendered, Change, Note.
-  + Ben phai co radio Cash va Bank Transfer.
-  + Nut Print preview receipt.
-  + Nut CONFIRM luu sale vao DB, hien Payment Successful, hien Receipt Preview, clear cart.
+  + Mo Payment dialog.
+  + Kiem tra ton kho truoc khi luu sale.
+  + Chi khi dialog duoc Accept thi moi finalize payment.
 - Split Payment:
-  + Mo Split Payment QDialog.
-  + Co Cash va Card/Transfer input.
-  + Neu tong tien >= Grand Total thi luu sale method Split.
-  + Hien Receipt Preview va clear cart.
-- Cancel:
-  + Hoi xac nhan void transaction.
-  + Neu Yes thi clear cart, reset discount/total.
-- Sau Pay/Split thanh cong:
-  + Goi notify_app_data_changed() de dashboard/reports reload.
+  + Ho tro Cash + Card/Transfer.
+  + Cung chi hien hoa don sau khi thanh toan thanh cong.
+- Receipt Preview:
+  + Hien sau sale thanh cong.
+  + Gom payment method, item, total, tendered, change.
+- Khong con luong preview hoa don truoc khi giao dich thanh cong.
 
-8. Receipt Preview hien tai
-- Sau Pay hoac Split thanh cong, app tao receipt text va hien trong QDialog.
-- Receipt co:
-  + MY POS SHOP
-  + Date/time
-  + Payment method
-  + Items: name, Qty, Price, Amount
-  + Total
-  + Tendered
-  + Change
-  + Thank-you line
-- Receipt hien bang QTextEdit read-only font Consolas.
-- Chua luu receipt.txt ra file.
+8. Product Management hien tai
+- Man chinh chi gom:
+  + Search
+  + Add Product
+  + Bang san pham
+  + Edit/Delete theo tung dong
+- Add Product:
+  + Mo ProductDialog modal.
+  + Save xong dong popup va reload bang.
+- Edit Product:
+  + Mo ProductDialog modal.
+  + Tu dien du lieu cu.
+  + Save xong dong popup va reload bang.
+- Modal van ho tro:
+  + Hinh anh san pham.
+  + Nhieu barcode.
+  + Primary/linked barcode.
+  + Validate barcode trung.
 
-9. Product Management hien tai
-- File chinh: product_management/product_management_window.py.
-- La QWidget page nam trong QStackedWidget.
-- Form dung QFormLayout.
-- Search realtime bang textChanged.
-- Table columns:
-  + No.
-  + Barcode
-  + Product Name
-  + Price
-  + Category
-  + Requires Weight
-- No. la so thu tu hien thi, ID that luu trong UserRole.
-- Add/Update/Delete product se reload table va emit data_changed.
+9. Dang nhap va phien lam viec
+- Login co toggle "Keep me logged in".
+- Neu bat toggle:
+  + user id duoc luu trong settings.
+  + Mo app lan sau se tu khoi phuc user.
+- Logout:
+  + Xoa session.
+  + Quay lai man login.
 
 10. Cach chay app
 - Cai moi truong:
   .\setup.ps1
-
-- Chay app chinh:
+- Chay app:
   .\.venv\Scripts\python.exe main.py
-
 - Lenh cu van chay duoc:
   .\.venv\Scripts\python.exe pos_terminal.py
 
-11. Lenh kiem tra da chay
-- Compile check:
-  python -m py_compile main.py pos_terminal.py database\db.py pos_terminal\pos_window.py product_management\product_management_window.py admin\user_management_window.py admin\register_management_window.py admin\settings_window.py
+11. Kiem tra da chay
+- Compile:
+  + python -m compileall main.py login database pos_terminal product_management admin ui
+- Test database tam:
+  + Xoa barcode sau sale.
+  + Session persistence.
+  + Chan het hang va validate ton kho.
+- Smoke test UI offscreen:
+  + Reset toast.
+  + Khong hien receipt neu payment dialog bi reject.
+  + Modal Add/Edit Product.
+  + Bang Product Management co action buttons theo dong.
 
-- Smoke test gan day:
-  + app_data_changed emit duoc.
-  + Cart 30 item hien du row count.
-  + Cart vertical scrollbar policy = ScrollBarAlwaysOn.
-  + Cart horizontal scrollbar policy = ScrollBarAlwaysOff.
-  + Cart co scroll range > 0 khi nhieu item.
-
-12. Viec can lam tiep theo
-- Them dialog chon san pham khi POS search ra nhieu ket qua.
-- Them sale history page de xem lai sales/sale_items/sale_payments.
-- Them receipt number / sale_id vao Receipt Preview.
-- Them export receipt.txt hoac PDF.
-- Them Refund/Return workflow.
-- Them Inventory UI neu can quan ly stock_qty.
-- Them Category Management neu can tach category rieng.
+12. Viec nen lam tiep
+- Them Inventory UI de quan ly stock_qty chuan hon.
+- Them sale history page.
+- Them receipt number / sale_id vao receipt.
+- Them export receipt ra TXT/PDF.
+- Them refund/return workflow.
+- Them dialog chon san pham khi search ra nhieu ket qua.
+- Them category management neu can tach rieng.
 - Them discount theo tung item.
-- Them tax/VAT/service charge vao payment/totals.
-- Them database migration versioning ro rang hon.
-- Them .gitignore cho .venv, __pycache__, pos.db neu khong muon commit data runtime.
+- Them tax/VAT/service charge.
+- Them migration versioning ro rang hon.
 
 13. Ghi chu cho nguoi tiep tuc code
-- Han che viet SQL truc tiep trong UI. Nen them ham vao database/db.py roi goi tu UI.
-- Neu page co ghi DB, nen them data_changed signal va emit sau khi save/delete/update.
-- Neu page can refresh data, nen them reload_data() de MainWindow bat duoc.
-- Sua POS Terminal thi xem pos_terminal/pos_window.py.
-- Sua Product Management thi xem product_management/product_management_window.py.
-- Sua schema/database helper thi xem database/db.py.
-- UI text hien dang bang tieng Anh theo yeu cau app.
-- pos.db la runtime database, data co the khac theo may.
-- .venv va __pycache__ la generated folders, khong phai source chinh.
+- Han che viet SQL truc tiep trong UI; nen dat helper vao database/db.py.
+- Page nao ghi DB thi nen emit data_changed sau khi thay doi.
+- Page nao can refresh thi nen co reload_data().
+- Neu sua POS thi xem pos_terminal/pos_window.py.
+- Neu sua Product Management thi xem product_management/product_management_window.py.
+- Neu sua login/session thi xem login/login_window.py.
+- Neu sua schema/helper thi xem database/db.py.
+- pos.db la runtime database, du lieu co the khac giua cac may.

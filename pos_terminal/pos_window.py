@@ -2,13 +2,14 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QFormLayout,
     QFrame,
+    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -22,7 +23,6 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
-    QStyle,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
 
 from database import db
 from product_management.product_management_window import ProductManagementWindow
+from ui.icon_manager import IconManager
 
 # Admin imports
 from admin.admin_dashboard_window import create_admin_dashboard
@@ -41,7 +42,7 @@ from admin.reports_window import create_reports
 from admin.audit_logs_window import create_audit_logs
 from admin.settings_window import create_settings
 
-from login import add_cash_movement, has_permission, log_audit, open_cash_shift
+from login import add_cash_movement, clear_session, has_permission, log_audit, open_cash_shift
 
 
 ACCENT_BLUE = "#2563EB"
@@ -61,6 +62,7 @@ class CartItem:
     name: str
     qty: float
     unit_price: float
+    requires_weight: bool = False
 
     @property
     def subtotal(self) -> float:
@@ -126,6 +128,10 @@ class PosMainWindow(QMainWindow):
         self.cart_table_updating = False
         self.admin_pages: dict = {}
         self.page_indexes: dict[str, int] = {}
+        self.logout_requested = False
+        self.reset_toast: QLabel | None = None
+        self.reset_toast_effect: QGraphicsOpacityEffect | None = None
+        self.reset_toast_animation: QPropertyAnimation | None = None
 
         self.build_ui()
         self.connect_global_refresh()
@@ -275,6 +281,14 @@ class PosMainWindow(QMainWindow):
         button.setObjectName("dashboardActionButton")
         button.setProperty("role", style_name)
         button.setMinimumHeight(48)
+        page_icon = {
+            "pos_terminal": "terminal",
+            "reports": "reports",
+            "registers": "registers",
+            "products": "products",
+        }.get(page_key)
+        if page_icon is not None:
+            IconManager.apply_button(button, page_icon, IconManager.LIGHT)
         button.clicked.connect(lambda _checked=False, key=page_key: self.switch_page(self.page_indexes[key]))
         return button
 
@@ -285,8 +299,7 @@ class PosMainWindow(QMainWindow):
         layout.setContentsMargins(28, 24, 28, 28)
         layout.setSpacing(18)
 
-        title = QLabel("Cashier Dashboard")
-        title.setObjectName("workspaceTitle")
+        title = IconManager.label("Cashier Dashboard", "dashboard", "workspaceTitle", icon_size=20)
         subtitle = QLabel(
             f"Welcome {self.user_data.get('full_name', 'Cashier')} | Register #{self.register_id} | Shift #{self.shift_id}"
         )
@@ -316,8 +329,7 @@ class PosMainWindow(QMainWindow):
         layout.setContentsMargins(28, 24, 28, 28)
         layout.setSpacing(18)
 
-        title = QLabel("Manager Dashboard")
-        title.setObjectName("workspaceTitle")
+        title = IconManager.label("Manager Dashboard", "dashboard", "workspaceTitle", icon_size=20)
         subtitle = QLabel("Monitor sales, registers, shift activity, and daily performance")
         subtitle.setObjectName("cashierInfo")
         layout.addWidget(title)
@@ -358,7 +370,6 @@ class PosMainWindow(QMainWindow):
         layout.addWidget(subtitle)
         layout.addSpacing(22)
 
-        style = self.style()
         self.sidebar_buttons = []
 
         def add_sidebar_button(label: str, page_key: str, icon) -> None:
@@ -377,24 +388,24 @@ class PosMainWindow(QMainWindow):
             add_sidebar_button(
                 "Cashier Dashboard",
                 "cashier_dashboard",
-                style.standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon),
+                IconManager.icon("dashboard"),
             )
         elif role_name == "Manager":
             add_sidebar_button(
                 "Manager Dashboard",
                 "manager_dashboard",
-                style.standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon),
+                IconManager.icon("dashboard"),
             )
         elif role_name == "Admin":
             add_sidebar_button(
                 "Admin Dashboard",
                 "admin_dashboard",
-                style.standardIcon(QStyle.StandardPixmap.SP_DirHomeIcon),
+                IconManager.icon("dashboard"),
             )
 
         self.terminal_button = SidebarButton(
             "POS Terminal",
-            style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon),
+            IconManager.icon("terminal"),
             active=False,
         )
         self.terminal_button.clicked.connect(
@@ -408,23 +419,30 @@ class PosMainWindow(QMainWindow):
             add_sidebar_button(
                 "Product Management",
                 "products",
-                style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+                IconManager.icon("products"),
             )
 
         if role_name == "Manager":
-            add_sidebar_button("Reports", "reports", style.standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView))
-            add_sidebar_button("Registers", "registers", style.standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon))
-            add_sidebar_button("Audit Logs", "audit_logs", style.standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+            add_sidebar_button("Reports", "reports", IconManager.icon("reports"))
+            add_sidebar_button("Registers", "registers", IconManager.icon("registers"))
+            add_sidebar_button("Audit Logs", "audit_logs", IconManager.icon("audit_logs"))
         elif role_name == "Admin":
-            add_sidebar_button("Users", "users", style.standardIcon(QStyle.StandardPixmap.SP_FileDialogContentsView))
-            add_sidebar_button("Registers", "registers", style.standardIcon(QStyle.StandardPixmap.SP_DriveHDIcon))
-            add_sidebar_button("Reports", "reports", style.standardIcon(QStyle.StandardPixmap.SP_FileDialogInfoView))
-            add_sidebar_button("Audit Logs", "audit_logs", style.standardIcon(QStyle.StandardPixmap.SP_FileIcon))
-            add_sidebar_button("Settings", "settings", style.standardIcon(QStyle.StandardPixmap.SP_FileDialogDetailedView))
+            add_sidebar_button("Users", "users", IconManager.icon("users"))
+            add_sidebar_button("Registers", "registers", IconManager.icon("registers"))
+            add_sidebar_button("Reports", "reports", IconManager.icon("reports"))
+            add_sidebar_button("Audit Logs", "audit_logs", IconManager.icon("audit_logs"))
+            add_sidebar_button("Settings", "settings", IconManager.icon("settings"))
 
         self.switch_page(self.pages.currentIndex())
 
         layout.addStretch(1)
+
+        logout_button = QPushButton("Logout")
+        logout_button.setObjectName("logoutButton")
+        logout_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        IconManager.apply_button(logout_button, "logout", IconManager.LIGHT)
+        logout_button.clicked.connect(self.request_logout)
+        layout.addWidget(logout_button)
 
         footer = QLabel("SQLite Desktop Mode")
         footer.setObjectName("sidebarFooter")
@@ -462,8 +480,7 @@ class PosMainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
 
-        heading = QLabel("POS Terminal")
-        heading.setObjectName("workspaceTitle")
+        heading = IconManager.label("POS Terminal", "terminal", "workspaceTitle", icon_size=20)
 
         cashier_info = QLabel(
             f"{self.user_data.get('full_name', 'Cashier')} | "
@@ -489,8 +506,7 @@ class PosMainWindow(QMainWindow):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(3)
 
-        title = QLabel("Products")
-        title.setObjectName("panelTitle")
+        title = IconManager.label("Products", "products", "panelTitle")
         subtitle = QLabel("Search or scan barcode to add items to cart")
         subtitle.setObjectName("panelSubtitle")
 
@@ -695,10 +711,13 @@ class PosMainWindow(QMainWindow):
 
         pay_cash_button = ActionButton("Pay", "primary")
         pay_cash_button.setObjectName("payButton")
+        IconManager.apply_button(pay_cash_button, "payment", IconManager.LIGHT)
         split_payment_button = ActionButton("Split Payment", "warning")
         split_payment_button.setObjectName("splitButton")
+        IconManager.apply_button(split_payment_button, "payment", IconManager.LIGHT)
         void_button = ActionButton("Cancel", "neutral")
         void_button.setObjectName("cancelButton")
+        IconManager.apply_button(void_button, "cancel", IconManager.DARK)
 
         pay_cash_button.clicked.connect(self.handle_pay_cash)
         split_payment_button.clicked.connect(self.handle_split_payment)
@@ -727,12 +746,71 @@ class PosMainWindow(QMainWindow):
         escape_shortcut.activated.connect(self.handle_void_cancel)
 
         refresh_shortcut = QShortcut(QKeySequence("Shift+F5"), self)
-        refresh_shortcut.activated.connect(self.notify_app_data_changed)
+        refresh_shortcut.activated.connect(self.handle_reset_shortcut)
 
         focus_search_action = QAction(self)
+        IconManager.apply_action(focus_search_action, "search")
         focus_search_action.setShortcut(QKeySequence("Ctrl+L"))
         focus_search_action.triggered.connect(self.search_input.setFocus)
         self.addAction(focus_search_action)
+
+    def handle_reset_shortcut(self) -> None:
+        self.notify_app_data_changed()
+        self.statusBar().showMessage("Reset successful", 2500)
+        self.show_reset_toast("Reset successful")
+
+    def show_reset_toast(self, message: str) -> None:
+        if self.reset_toast is None:
+            self.reset_toast = QLabel(self)
+            self.reset_toast.setObjectName("resetToast")
+            self.reset_toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.reset_toast_effect = QGraphicsOpacityEffect(self.reset_toast)
+            self.reset_toast.setGraphicsEffect(self.reset_toast_effect)
+
+        self.reset_toast.setText(message)
+        self.reset_toast.adjustSize()
+        toast_width = max(self.reset_toast.width() + 34, 180)
+        toast_height = max(self.reset_toast.height() + 18, 42)
+        self.reset_toast.resize(toast_width, toast_height)
+        self.reset_toast.move(
+            max(self.width() - toast_width - 28, 20),
+            max(self.height() - toast_height - 58, 20),
+        )
+        self.reset_toast.raise_()
+        self.reset_toast.show()
+
+        if self.reset_toast_animation is not None:
+            self.reset_toast_animation.stop()
+
+        if self.reset_toast_effect is None:
+            return
+
+        self.reset_toast_effect.setOpacity(0.0)
+        self.reset_toast_animation = QPropertyAnimation(self.reset_toast_effect, b"opacity", self)
+        self.reset_toast_animation.setDuration(1700)
+        self.reset_toast_animation.setKeyValueAt(0.0, 0.0)
+        self.reset_toast_animation.setKeyValueAt(0.18, 1.0)
+        self.reset_toast_animation.setKeyValueAt(0.78, 1.0)
+        self.reset_toast_animation.setKeyValueAt(1.0, 0.0)
+        self.reset_toast_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        self.reset_toast_animation.finished.connect(self.reset_toast.hide)
+        self.reset_toast_animation.start()
+
+    def request_logout(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Confirm Logout",
+            "Are you sure you want to log out?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        log_audit(int(self.user_data.get("id", 0)), "LOGOUT")
+        clear_session()
+        self.logout_requested = True
+        self.close()
 
     def handle_product_search(self) -> None:
         keyword = self.search_input.text().strip()
@@ -747,6 +825,12 @@ class PosMainWindow(QMainWindow):
                     "Multiple Products Found",
                     "Multiple products match this search. Please type a more specific name or barcode.",
                 )
+            elif db.was_barcode_sold(keyword):
+                QMessageBox.warning(
+                    self,
+                    "Out of Stock",
+                    f"Barcode {keyword} has already been sold and is no longer available in inventory.",
+                )
             else:
                 QMessageBox.warning(self, "Product Not Found", "No product was found.")
             return
@@ -757,6 +841,7 @@ class PosMainWindow(QMainWindow):
 
     def add_product_to_cart(self, product) -> None:
         product_id = int(product["id"])
+        scanned_barcode = product["barcode"] or product.get("primary_barcode") or ""
         quantity = 1.0
         if product["requires_weight"]:
             quantity, accepted = QInputDialog.getDouble(
@@ -771,8 +856,26 @@ class PosMainWindow(QMainWindow):
             if not accepted:
                 return
 
+        current_cart_qty = self.get_cart_quantity_for_product(product_id)
+        available_qty = db.get_available_stock(product_id)
+        if available_qty <= 0:
+            self.show_out_of_stock_warning(product["name"])
+            return
+        if current_cart_qty + quantity > available_qty:
+            self.show_out_of_stock_warning(product["name"], available_qty)
+            return
+
         for cart_item in self.cart_items:
-            if cart_item.product_id == product_id:
+            same_scanned_item = bool(scanned_barcode) and cart_item.barcode == scanned_barcode
+            same_unbarcoded_product = not scanned_barcode and cart_item.product_id == product_id
+            if same_scanned_item:
+                QMessageBox.warning(
+                    self,
+                    "Barcode Already Scanned",
+                    f"Barcode {scanned_barcode} is already in the current sale.",
+                )
+                return
+            if same_unbarcoded_product:
                 cart_item.qty += quantity
                 self.populate_cart()
                 self.statusBar().showMessage(f"Quantity increased: {cart_item.name}", 2500)
@@ -781,10 +884,11 @@ class PosMainWindow(QMainWindow):
         self.cart_items.append(
             CartItem(
                 product_id=product_id,
-                barcode=product["barcode"] or product.get("primary_barcode") or "",
+                barcode=scanned_barcode,
                 name=product["name"],
                 qty=quantity,
                 unit_price=float(product["price"]),
+                requires_weight=bool(product["requires_weight"]),
             )
         )
         self.populate_cart()
@@ -804,6 +908,7 @@ class PosMainWindow(QMainWindow):
             for column, value in enumerate(values):
                 table_item = QTableWidgetItem(value)
                 table_item.setData(Qt.ItemDataRole.UserRole, item.product_id)
+                table_item.setData(Qt.ItemDataRole.UserRole + 1, item.barcode)
                 if column in (0, 1):
                     table_item.setTextAlignment(
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -818,13 +923,15 @@ class PosMainWindow(QMainWindow):
                     table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self.cart_table.setItem(row, column, table_item)
 
-            delete_button = QPushButton("X")
+            delete_button = QPushButton()
             delete_button.setObjectName("tableDeleteIconButton")
             delete_button.setToolTip("Remove item")
             delete_button.setFixedSize(28, 28)
+            IconManager.apply_button(delete_button, "delete", "#DC2626", size=16)
             delete_button.clicked.connect(
-                lambda _checked=False, product_id=item.product_id: self.remove_cart_item(
-                    product_id
+                lambda _checked=False, product_id=item.product_id, barcode=item.barcode: self.remove_cart_item(
+                    product_id,
+                    barcode,
                 )
             )
             self.cart_table.setCellWidget(row, 5, delete_button)
@@ -842,6 +949,7 @@ class PosMainWindow(QMainWindow):
             return
 
         product_id = table_item.data(Qt.ItemDataRole.UserRole)
+        barcode = table_item.data(Qt.ItemDataRole.UserRole + 1)
         try:
             new_qty = float(table_item.text().strip())
         except ValueError:
@@ -850,18 +958,85 @@ class PosMainWindow(QMainWindow):
             return
 
         if new_qty <= 0:
-            self.remove_cart_item(product_id)
+            self.remove_cart_item(product_id, barcode)
             return
 
-        for cart_item in self.cart_items:
-            if cart_item.product_id == product_id:
-                cart_item.qty = new_qty
+        cart_item = next(
+            (
+                item
+                for item in self.cart_items
+                if item.product_id == product_id and item.barcode == barcode
+            ),
+            None,
+        )
+        if cart_item is not None and cart_item.barcode and not cart_item.requires_weight and new_qty > 1:
+            self.populate_cart()
+            QMessageBox.warning(
+                self,
+                "Invalid Quantity",
+                "A scanned barcode can only be sold once per transaction.",
+            )
+            return
+
+        available_qty = db.get_available_stock(int(product_id))
+        if new_qty > available_qty:
+            self.populate_cart()
+            self.show_out_of_stock_warning(
+                self.get_cart_item_name(int(product_id)) or f"Product #{product_id}",
+                available_qty,
+            )
+            return
+
+        for item in self.cart_items:
+            if item.product_id == product_id and item.barcode == barcode:
+                item.qty = new_qty
                 break
         self.populate_cart()
 
-    def remove_cart_item(self, product_id: int) -> None:
-        self.cart_items = [item for item in self.cart_items if item.product_id != product_id]
+    def remove_cart_item(self, product_id: int, barcode: str | None = None) -> None:
+        self.cart_items = [
+            item
+            for item in self.cart_items
+            if not (
+                item.product_id == product_id
+                and (barcode is None or item.barcode == barcode)
+            )
+        ]
         self.populate_cart()
+
+    def get_cart_quantity_for_product(self, product_id: int) -> float:
+        return sum(item.qty for item in self.cart_items if item.product_id == product_id)
+
+    def get_cart_item_name(self, product_id: int) -> str | None:
+        for item in self.cart_items:
+            if item.product_id == product_id:
+                return item.name
+        return None
+
+    def show_out_of_stock_warning(self, product_name: str, available_qty: float = 0) -> None:
+        if available_qty > 0:
+            message = (
+                f"{product_name} does not have enough stock.\n"
+                f"Available now: {available_qty:g}"
+            )
+        else:
+            message = f"{product_name} is out of stock and cannot be added to this sale."
+        QMessageBox.warning(self, "Out of Stock", message)
+
+    def ensure_cart_in_stock(self) -> bool:
+        for item in self.cart_items:
+            available_qty = db.get_available_stock(item.product_id)
+            if available_qty <= 0 or item.qty > available_qty:
+                self.show_out_of_stock_warning(item.name, available_qty)
+                return False
+            if item.barcode and not db.is_barcode_available(item.barcode):
+                QMessageBox.warning(
+                    self,
+                    "Out of Stock",
+                    f"Barcode {item.barcode} is no longer available in inventory.",
+                )
+                return False
+        return True
 
     def refresh_total(self) -> None:
         subtotal = self.get_cart_subtotal()
@@ -891,8 +1066,27 @@ class PosMainWindow(QMainWindow):
         if total_amount <= 0:
             QMessageBox.warning(self, "Empty Cart", "Please add products before payment.")
             return
+        if not self.ensure_cart_in_stock():
+            return
 
         self.open_payment_dialog(total_amount)
+
+    def finalize_successful_payment(self, payment_result: dict[str, object]) -> None:
+        QMessageBox.information(
+            self,
+            "Payment Successful",
+            f"Payment successful.\nChange: ${float(payment_result['change_amount']):,.2f}",
+        )
+        self.notify_app_data_changed()
+        receipt_text = self.build_receipt_text(
+            sale_items=payment_result["sale_items"],
+            total_amount=float(payment_result["total_amount"]),
+            tendered_amount=float(payment_result["tendered_amount"]),
+            change_amount=float(payment_result["change_amount"]),
+            payment_method=str(payment_result["payment_method"]),
+        )
+        self.show_receipt_preview(receipt_text)
+        self.clear_current_sale()
 
     def open_payment_dialog(self, total_amount: float) -> None:
         dialog = QDialog(self)
@@ -908,8 +1102,7 @@ class PosMainWindow(QMainWindow):
         dialog_header.setContentsMargins(0, 0, 0, 0)
         dialog_header.setSpacing(4)
 
-        dialog_title = QLabel("Payment")
-        dialog_title.setObjectName("paymentDialogTitle")
+        dialog_title = IconManager.label("Payment", "payment", "paymentDialogTitle", icon_size=20)
         dialog_subtitle = QLabel("Review tendered amount, change, and payment method")
         dialog_subtitle.setObjectName("paymentDialogSubtitle")
 
@@ -971,8 +1164,12 @@ class PosMainWindow(QMainWindow):
         method_title = QLabel("Payment Method")
         method_title.setObjectName("paymentFieldLabel")
         cash_radio = QRadioButton("Cash")
+        cash_radio.setIcon(IconManager.icon("cash"))
+        cash_radio.setIconSize(QSize(18, 18))
         cash_radio.setChecked(True)
         bank_radio = QRadioButton("Bank Transfer")
+        bank_radio.setIcon(IconManager.icon("payment"))
+        bank_radio.setIconSize(QSize(18, 18))
 
         right_layout.addWidget(method_title)
         right_layout.addWidget(cash_radio)
@@ -985,12 +1182,14 @@ class PosMainWindow(QMainWindow):
         button_layout = QHBoxLayout()
         button_layout.addStretch(1)
 
-        print_button = QPushButton("Print")
-        print_button.setObjectName("neutralDialogButton")
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("neutralDialogButton")
+        IconManager.apply_button(cancel_button, "cancel", IconManager.DARK)
         confirm_button = QPushButton("CONFIRM")
         confirm_button.setObjectName("primaryDialogButton")
+        IconManager.apply_button(confirm_button, "confirm", IconManager.LIGHT)
 
-        button_layout.addWidget(print_button)
+        button_layout.addWidget(cancel_button)
         button_layout.addWidget(confirm_button)
         root_layout.addLayout(button_layout)
 
@@ -1013,32 +1212,10 @@ class PosMainWindow(QMainWindow):
                 return
             change_value.setText(f"${max(tendered_amount - total_amount, 0):,.2f}")
 
-        def build_dialog_receipt() -> str | None:
-            tendered_amount = get_tendered_amount()
-            if tendered_amount is None:
-                return None
-            if tendered_amount < total_amount:
-                QMessageBox.warning(
-                    dialog,
-                    "Insufficient Payment",
-                    "Tendered amount is less than the grand total.",
-                )
-                return None
-            payment_method = "Cash" if cash_radio.isChecked() else "Bank Transfer"
-            return self.build_receipt_text(
-                sale_items=self.get_sale_items_from_cart_table(),
-                total_amount=total_amount,
-                tendered_amount=tendered_amount,
-                change_amount=tendered_amount - total_amount,
-                payment_method=payment_method,
-            )
-
-        def print_receipt_preview() -> None:
-            receipt_text = build_dialog_receipt()
-            if receipt_text is not None:
-                self.show_receipt_preview(receipt_text)
+        payment_result: dict[str, object] | None = None
 
         def confirm_payment() -> None:
+            nonlocal payment_result
             tendered_amount = get_tendered_amount()
             if tendered_amount is None:
                 return
@@ -1055,6 +1232,8 @@ class PosMainWindow(QMainWindow):
             sale_items = self.get_sale_items_from_cart_table()
 
             try:
+                if not self.ensure_cart_in_stock():
+                    return
                 sale_id = db.create_sale(
                     total_amount,
                     payment_method,
@@ -1086,33 +1265,28 @@ class PosMainWindow(QMainWindow):
                 QMessageBox.warning(dialog, "Database Error", f"Could not save sale: {error}")
                 return
 
-            QMessageBox.information(
-                self,
-                "Payment Successful",
-                f"Payment successful.\nChange: ${change_amount:,.2f}",
-            )
-            self.notify_app_data_changed()
-            receipt_text = self.build_receipt_text(
-                sale_items=sale_items,
-                total_amount=total_amount,
-                tendered_amount=tendered_amount,
-                change_amount=change_amount,
-                payment_method=payment_method,
-            )
+            payment_result = {
+                "sale_items": sale_items,
+                "total_amount": total_amount,
+                "tendered_amount": tendered_amount,
+                "change_amount": change_amount,
+                "payment_method": payment_method,
+            }
             dialog.accept()
-            self.show_receipt_preview(receipt_text)
-            self.clear_current_sale()
 
         amount_tendered_input.textChanged.connect(update_change)
-        print_button.clicked.connect(print_receipt_preview)
+        cancel_button.clicked.connect(dialog.reject)
         confirm_button.clicked.connect(confirm_payment)
         amount_tendered_input.setFocus()
-        dialog.exec()
+        if dialog.exec() == QDialog.DialogCode.Accepted and payment_result is not None:
+            self.finalize_successful_payment(payment_result)
 
     def handle_split_payment(self) -> None:
         total_amount = self.get_cart_total()
         if total_amount <= 0:
             QMessageBox.warning(self, "Empty Cart", "Please add products before payment.")
+            return
+        if not self.ensure_cart_in_stock():
             return
 
         dialog = QDialog(self)
@@ -1149,16 +1323,21 @@ class PosMainWindow(QMainWindow):
 
         cancel_button = QPushButton("Cancel")
         cancel_button.setObjectName("neutralDialogButton")
+        IconManager.apply_button(cancel_button, "cancel", IconManager.DARK)
         cancel_button.clicked.connect(dialog.reject)
 
         confirm_button = QPushButton("Confirm")
         confirm_button.setObjectName("primaryDialogButton")
+        IconManager.apply_button(confirm_button, "confirm", IconManager.LIGHT)
 
         button_layout.addWidget(cancel_button)
         button_layout.addWidget(confirm_button)
         layout.addLayout(button_layout)
 
+        payment_result: dict[str, object] | None = None
+
         def confirm_split_payment() -> None:
+            nonlocal payment_result
             try:
                 cash_amount = self.parse_money(cash_input.text() or "0")
                 card_amount = self.parse_money(card_input.text() or "0")
@@ -1179,6 +1358,8 @@ class PosMainWindow(QMainWindow):
             sale_items = self.get_sale_items_from_cart_table()
 
             try:
+                if not self.ensure_cart_in_stock():
+                    return
                 sale_id = db.create_sale(
                     total_amount,
                     "Split",
@@ -1206,25 +1387,18 @@ class PosMainWindow(QMainWindow):
                 QMessageBox.warning(dialog, "Database Error", f"Could not save sale: {error}")
                 return
 
-            QMessageBox.information(
-                self,
-                "Payment Successful",
-                f"Payment successful.\nChange: ${change_amount:,.2f}",
-            )
-            self.notify_app_data_changed()
-            receipt_text = self.build_receipt_text(
-                sale_items=sale_items,
-                total_amount=total_amount,
-                tendered_amount=tendered_amount,
-                change_amount=change_amount,
-                payment_method="Split",
-            )
+            payment_result = {
+                "sale_items": sale_items,
+                "total_amount": total_amount,
+                "tendered_amount": tendered_amount,
+                "change_amount": change_amount,
+                "payment_method": "Split",
+            }
             dialog.accept()
-            self.show_receipt_preview(receipt_text)
-            self.clear_current_sale()
 
         confirm_button.clicked.connect(confirm_split_payment)
-        dialog.exec()
+        if dialog.exec() == QDialog.DialogCode.Accepted and payment_result is not None:
+            self.finalize_successful_payment(payment_result)
 
     def handle_void_cancel(self) -> None:
         if not self.cart_items and self.get_discount_amount() == 0:
@@ -1337,6 +1511,7 @@ class PosMainWindow(QMainWindow):
 
         close_button = QPushButton("Close")
         close_button.setObjectName("primaryDialogButton")
+        IconManager.apply_button(close_button, "close", IconManager.LIGHT)
         close_button.clicked.connect(dialog.accept)
 
         button_layout = QHBoxLayout()
@@ -1427,6 +1602,25 @@ def build_stylesheet() -> str:
         background: rgba(37, 99, 235, 0.12);
         border-color: rgba(37, 99, 235, 0.24);
         color: {ACCENT_BLUE};
+    }}
+
+    #logoutButton {{
+        background: #DC2626;
+        border: none;
+        border-radius: 8px;
+        color: #FFFFFF;
+        font-size: 14px;
+        font-weight: 700;
+        padding: 12px 14px;
+        text-align: left;
+    }}
+
+    #logoutButton:hover {{
+        background: #B91C1C;
+    }}
+
+    #logoutButton:pressed {{
+        background: #991B1B;
     }}
 
     #cardPanel, #checkoutPanel {{
@@ -1594,6 +1788,15 @@ def build_stylesheet() -> str:
     #statusHint {{
         color: {TEXT_MUTED};
         font-size: 12px;
+    }}
+
+    #resetToast {{
+        background: rgba(15, 118, 110, 0.96);
+        border-radius: 10px;
+        color: #FFFFFF;
+        font-size: 13px;
+        font-weight: 800;
+        padding: 10px 16px;
     }}
 
     #totalBlock {{
