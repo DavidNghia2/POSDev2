@@ -14,17 +14,17 @@ Cap nhat gan nhat: 2026-05-16
 - Cac trang co the tu reload du lieu thong qua signal chung app_data_changed.
 
 2. Cac thay doi da sua / da bo sung
-- Chuc nang cu: Barcode van con sau khi ban.
-  Chuc nang moi: Barcode da ban bi xoa khoi Product Management va Database.
-  Da sua: Xoa barcode sau sale thanh cong; neu con barcode khac thi tu chon barcode tiep theo lam barcode chinh.
+- Chuc nang cu: App tung dung viec xoa barcode sau khi ban de gia lap het hang.
+  Chuc nang moi: Barcode la ma nhan dien co dinh, stock_qty la nguon ton kho chinh.
+  Da sua: Bo logic xoa barcode sau sale, moi lan ban chi tru stock_qty.
 
 - Chuc nang cu: Barcode da ban van co the quet lai va di tiep.
   Chuc nang moi: Barcode het hang/da ban bi chan ngay.
   Da sua: Them kiem tra khi quet, kiem tra lai truoc khi thanh toan, va them lop validate o database de khong ban lot khi ton kho thay doi.
 
-- Chuc nang cu: Gio hang gop cac barcode khac nhau cua cung san pham vao mot dong.
-  Chuc nang moi: Gio hang phan biet tung barcode da quet.
-  Da sua: Chuyen logic cart sang xu ly theo barcode de ban dung tung ma da quet.
+- Chuc nang cu: Gio hang tung chan quet lap lai cung mot barcode.
+  Chuc nang moi: Quet lai cung barcode se tang so luong cua san pham.
+  Da sua: Gio hang quay ve xu ly theo product_id, phu hop voi barcode co dinh va ton kho theo so luong.
 
 - Chuc nang cu: Shift + F5 chi refresh, khong co phan hoi giao dien.
   Chuc nang moi: Reset co thong bao thanh cong.
@@ -61,7 +61,7 @@ Cap nhat gan nhat: 2026-05-16
   Dang nhap, verify user, session persistence, settings auth, cash shift helpers.
 
 - database/db.py
-  Helper database chung: products, barcodes, sales, ton kho kha dung, validate sale, xoa barcode sau ban.
+  Helper database chung: products, barcodes, sales, ton kho theo stock_qty, validate sale, migration inventory model.
 
 - pos_terminal/pos_window.py
   Main window, sidebar, POS Terminal, cart, payment, receipt preview, reset toast, logout.
@@ -116,8 +116,14 @@ Cap nhat gan nhat: 2026-05-16
   + is_barcode_available()
   + was_barcode_sold()
   + ensure_sale_items_available()
-  + remove_sold_barcodes()
-- Hien tai app uu tien dung barcode con lai nhu ton kho kha dung; stock_qty da co trong schema nhung chua co man Inventory rieng de quan ly day du.
+- stock_qty la nguon su that cua ton kho.
+- Da them migration mot lan de chuyen du lieu cu sang inventory model moi.
+- Ly do khong xoa barcode sau moi lan ban:
+  + Trong ban le thong thuong, barcode dai dien cho loai san pham, khong dai dien cho tung don vi rieng le.
+  + Vi du nhieu chai Coca cung loai co the dung chung mot barcode.
+  + Neu ban 1 chai ma xoa barcode thi chai tiep theo cung loai se khong quet duoc du van con hang.
+  + So luong con lai phai duoc quan ly bang stock_qty.
+  + Neu can theo doi tung mon rieng nhu dien thoai, ve, gift card, IMEI/serial thi nen tao bang rieng kieu serial_items/inventory_units, khong dung barcode san pham de thay the.
 
 6. POS Terminal hien tai
 - Layout:
@@ -131,7 +137,7 @@ Cap nhat gan nhat: 2026-05-16
 - Cart:
   + Columns: Barcode, Name, Qty, Price, Total, Remove.
   + Qty co the sua neu hop le.
-  + Barcode da quet khong duoc ban trung trong cung transaction.
+  + Quet lai cung barcode se tang qty cua san pham.
   + Gio hang kiem tra ton kho truoc khi thanh toan.
 - Actions:
   + Pay
@@ -170,6 +176,7 @@ Cap nhat gan nhat: 2026-05-16
   + Hinh anh san pham.
   + Nhieu barcode.
   + Primary/linked barcode.
+  + Stock Quantity.
   + Validate barcode trung.
 
 9. Dang nhap va phien lam viec
@@ -203,7 +210,7 @@ Cap nhat gan nhat: 2026-05-16
   + Bang Product Management co action buttons theo dong.
 
 12. Viec nen lam tiep
-- Them Inventory UI de quan ly stock_qty chuan hon.
+- Mo rong Inventory UI neu can nhap/xuat kho, lich su dieu chinh va ton theo chi nhanh.
 - Them sale history page.
 - Them receipt number / sale_id vao receipt.
 - Them export receipt ra TXT/PDF.

@@ -14,17 +14,17 @@ Last Updated: 2026-05-16
 - Shared refresh flow is handled through app_data_changed.
 
 2. Recently Completed Changes
-- Old: sold barcodes remained in the system.
-  New: sold barcodes are removed from Product Management and the database.
-  Changed: remove scanned barcode after a successful sale and promote the next remaining barcode to primary when needed.
+- Old: the app briefly used sold-barcode removal as a proxy for inventory.
+  New: barcode is stable product identity and stock_qty is the inventory source of truth.
+  Changed: removed sold-barcode deletion from the sale flow; sales now reduce stock_qty only.
 
 - Old: already-sold barcodes could be scanned again.
   New: unavailable/out-of-stock barcodes are blocked immediately.
   Changed: validation added on scan, before payment, and again inside the database sale transaction.
 
-- Old: multiple barcodes for one product could be merged incorrectly in the cart.
-  New: cart rows distinguish scanned barcodes.
-  Changed: cart logic now tracks barcode-level sale lines.
+- Old: scanning the same barcode twice was blocked.
+  New: scanning the same barcode again increases product quantity.
+  Changed: cart logic now merges by product_id, matching fixed product barcodes plus quantity-based inventory.
 
 - Old: Shift+F5 refreshed silently.
   New: reset shows visible success feedback.
@@ -58,7 +58,7 @@ Last Updated: 2026-05-16
 - login/login_window.py
   Login, auth helpers, session persistence, cash-shift helpers.
 - database/db.py
-  Shared database helpers for products, barcodes, sales, stock availability, sale validation, sold-barcode removal.
+  Shared database helpers for products, barcodes, sales, stock availability, sale validation, and inventory-model migration.
 - pos_terminal/pos_window.py
   Main window, sidebar, cart, payment, receipt preview, reset toast, logout.
 - product_management/product_management_window.py
@@ -99,8 +99,14 @@ Last Updated: 2026-05-16
   + is_barcode_available()
   + was_barcode_sold()
   + ensure_sale_items_available()
-  + remove_sold_barcodes()
-- Current app behavior treats remaining barcodes as practical sellable inventory; stock_qty exists in schema but still needs a full Inventory UI.
+- stock_qty is now the inventory source of truth.
+- A one-time migration converts legacy data into the new inventory model.
+- Why barcodes are not removed after each sale:
+  + In ordinary retail, a barcode identifies a product type, not one unique physical unit.
+  + Many identical Coca-Cola bottles can share the same barcode.
+  + If one sale deleted that barcode, the next identical bottle could no longer be scanned even while stock still exists.
+  + Remaining quantity belongs in stock_qty.
+  + If the business later needs item-level tracking for phones, tickets, gift cards, IMEI, or serial numbers, add a separate serial_items/inventory_units model instead of overloading product barcodes.
 
 6. POS Terminal
 - Layout:
@@ -113,7 +119,7 @@ Last Updated: 2026-05-16
 - Cart:
   + Barcode, Name, Qty, Price, Total, Remove
   + validates availability before payment
-  + prevents duplicate sale of the same scanned barcode in one transaction
+  + repeated scans of the same barcode increase quantity
 - Actions:
   + Pay
   + Split Payment
@@ -142,6 +148,7 @@ Last Updated: 2026-05-16
   + image selection
   + multiple barcodes
   + primary/linked barcode display
+  + stock quantity
   + duplicate-barcode validation
 
 9. Login and Session
@@ -171,7 +178,7 @@ Last Updated: 2026-05-16
   + row-level Product Management actions
 
 12. Recommended Next Work
-- Build Inventory UI for proper stock_qty management.
+- Expand Inventory UI later if you need stock adjustments, stock movement history, or multi-branch inventory.
 - Add Sales History page.
 - Add receipt number / sale_id to receipt.
 - Add TXT/PDF receipt export.

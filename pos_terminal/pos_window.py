@@ -563,7 +563,12 @@ class PosMainWindow(QMainWindow):
     def create_product_card(self, product) -> QFrame:
         card = QFrame()
         card.setObjectName("productCard")
-        card.setCursor(Qt.CursorShape.PointingHandCursor)
+        available_qty = float(product.get("stock_qty") or 0)
+        is_out_of_stock = available_qty <= 0
+        card.setProperty("outOfStock", is_out_of_stock)
+        card.setCursor(
+            Qt.CursorShape.ArrowCursor if is_out_of_stock else Qt.CursorShape.PointingHandCursor
+        )
         card.setMinimumSize(150, 188)
 
         layout = QVBoxLayout(card)
@@ -603,15 +608,21 @@ class PosMainWindow(QMainWindow):
         price_label.setObjectName("productPrice")
         price_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
+        stock_label = QLabel("Out of stock" if is_out_of_stock else f"Stock: {available_qty:g}")
+        stock_label.setObjectName("outOfStockLabel" if is_out_of_stock else "productStock")
+        stock_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+
         layout.addWidget(image_placeholder)
         layout.addWidget(name_label)
         layout.addWidget(barcode_label)
         layout.addWidget(price_label)
+        layout.addWidget(stock_label)
         layout.addStretch(1)
 
-        card.mousePressEvent = lambda event, selected_product=product: self.add_product_to_cart(
-            selected_product
-        )
+        if not is_out_of_stock:
+            card.mousePressEvent = lambda event, selected_product=product: self.add_product_to_cart(
+                selected_product
+            )
         return card
 
     def format_product_barcodes(self, barcodes: list[str]) -> str:
@@ -866,16 +877,7 @@ class PosMainWindow(QMainWindow):
             return
 
         for cart_item in self.cart_items:
-            same_scanned_item = bool(scanned_barcode) and cart_item.barcode == scanned_barcode
-            same_unbarcoded_product = not scanned_barcode and cart_item.product_id == product_id
-            if same_scanned_item:
-                QMessageBox.warning(
-                    self,
-                    "Barcode Already Scanned",
-                    f"Barcode {scanned_barcode} is already in the current sale.",
-                )
-                return
-            if same_unbarcoded_product:
+            if cart_item.product_id == product_id:
                 cart_item.qty += quantity
                 self.populate_cart()
                 self.statusBar().showMessage(f"Quantity increased: {cart_item.name}", 2500)
@@ -929,10 +931,7 @@ class PosMainWindow(QMainWindow):
             delete_button.setFixedSize(28, 28)
             IconManager.apply_button(delete_button, "delete", "#DC2626", size=16)
             delete_button.clicked.connect(
-                lambda _checked=False, product_id=item.product_id, barcode=item.barcode: self.remove_cart_item(
-                    product_id,
-                    barcode,
-                )
+                lambda _checked=False, product_id=item.product_id: self.remove_cart_item(product_id)
             )
             self.cart_table.setCellWidget(row, 5, delete_button)
 
@@ -949,7 +948,6 @@ class PosMainWindow(QMainWindow):
             return
 
         product_id = table_item.data(Qt.ItemDataRole.UserRole)
-        barcode = table_item.data(Qt.ItemDataRole.UserRole + 1)
         try:
             new_qty = float(table_item.text().strip())
         except ValueError:
@@ -958,24 +956,7 @@ class PosMainWindow(QMainWindow):
             return
 
         if new_qty <= 0:
-            self.remove_cart_item(product_id, barcode)
-            return
-
-        cart_item = next(
-            (
-                item
-                for item in self.cart_items
-                if item.product_id == product_id and item.barcode == barcode
-            ),
-            None,
-        )
-        if cart_item is not None and cart_item.barcode and not cart_item.requires_weight and new_qty > 1:
-            self.populate_cart()
-            QMessageBox.warning(
-                self,
-                "Invalid Quantity",
-                "A scanned barcode can only be sold once per transaction.",
-            )
+            self.remove_cart_item(product_id)
             return
 
         available_qty = db.get_available_stock(int(product_id))
@@ -988,19 +969,16 @@ class PosMainWindow(QMainWindow):
             return
 
         for item in self.cart_items:
-            if item.product_id == product_id and item.barcode == barcode:
+            if item.product_id == product_id:
                 item.qty = new_qty
                 break
         self.populate_cart()
 
-    def remove_cart_item(self, product_id: int, barcode: str | None = None) -> None:
+    def remove_cart_item(self, product_id: int) -> None:
         self.cart_items = [
             item
             for item in self.cart_items
-            if not (
-                item.product_id == product_id
-                and (barcode is None or item.barcode == barcode)
-            )
+            if item.product_id != product_id
         ]
         self.populate_cart()
 
@@ -1028,13 +1006,6 @@ class PosMainWindow(QMainWindow):
             available_qty = db.get_available_stock(item.product_id)
             if available_qty <= 0 or item.qty > available_qty:
                 self.show_out_of_stock_warning(item.name, available_qty)
-                return False
-            if item.barcode and not db.is_barcode_available(item.barcode):
-                QMessageBox.warning(
-                    self,
-                    "Out of Stock",
-                    f"Barcode {item.barcode} is no longer available in inventory.",
-                )
                 return False
         return True
 
@@ -1261,6 +1232,9 @@ class PosMainWindow(QMainWindow):
                     None,
                     f"total: {total_amount:.2f}",
                 )
+            except ValueError as error:
+                QMessageBox.warning(dialog, "Inventory Error", str(error))
+                return
             except Exception as error:
                 QMessageBox.warning(dialog, "Database Error", f"Could not save sale: {error}")
                 return
@@ -1383,6 +1357,9 @@ class PosMainWindow(QMainWindow):
                         f"Split sale #{sale_id}",
                     )
                 log_audit(self.user_data["id"], "CREATE_SALE", "sales", sale_id, None, f"total: {total_amount:.2f}")
+            except ValueError as error:
+                QMessageBox.warning(dialog, "Inventory Error", str(error))
+                return
             except Exception as error:
                 QMessageBox.warning(dialog, "Database Error", f"Could not save sale: {error}")
                 return
@@ -1652,6 +1629,11 @@ def build_stylesheet() -> str:
         background: #F8FBFF;
     }}
 
+    #productCard[outOfStock="true"] {{
+        background: #F8FAFC;
+        border-color: #CBD5E1;
+    }}
+
     #productImagePlaceholder {{
         background: #F8FAFC;
         border: 1px solid {BORDER};
@@ -1676,6 +1658,18 @@ def build_stylesheet() -> str:
     #productPrice {{
         color: {TEXT_DARK};
         font-size: 16px;
+        font-weight: 800;
+    }}
+
+    #productStock {{
+        color: {ACCENT_GREEN};
+        font-size: 12px;
+        font-weight: 800;
+    }}
+
+    #outOfStockLabel {{
+        color: #DC2626;
+        font-size: 12px;
         font-weight: 800;
     }}
 

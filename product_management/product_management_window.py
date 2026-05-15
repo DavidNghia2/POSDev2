@@ -376,11 +376,17 @@ class ProductDialog(QDialog):
         self.category_input = QLineEdit()
         self.category_input.setPlaceholderText("Category")
 
+        self.stock_input = QLineEdit()
+        self.stock_input.setPlaceholderText("Stock Quantity")
+        self.stock_input.setText("0")
+        self.stock_input.setValidator(QDoubleValidator(0.0, 999999999.0, 3))
+
         self.requires_weight_checkbox = QCheckBox()
 
         form_layout.addRow("Product Name", self.name_input)
         form_layout.addRow("Price", self.price_input)
         form_layout.addRow("Category", self.category_input)
+        form_layout.addRow("Stock Quantity", self.stock_input)
         form_layout.addRow("Requires Weight", self.requires_weight_checkbox)
 
         button_layout = QHBoxLayout()
@@ -408,6 +414,7 @@ class ProductDialog(QDialog):
         self.name_input.setText(str(product.get("name") or ""))
         self.price_input.setText(f'{float(product["price"]):.2f}')
         self.category_input.setText(str(product.get("category") or ""))
+        self.stock_input.setText(f'{float(product.get("stock_qty") or 0):g}')
         self.requires_weight_checkbox.setChecked(bool(product.get("requires_weight")))
         self.update_image_preview()
 
@@ -430,7 +437,7 @@ class ProductDialog(QDialog):
     def get_form_data(
         self,
         include_pending_barcode: bool = False,
-    ) -> tuple[str, float, str, bool, str, list[str]] | None:
+    ) -> tuple[str, float, str, float, bool, str, list[str]] | None:
         pending_barcode = self.barcode_input.text().strip()
         barcodes = list(self.barcodes)
         if include_pending_barcode and pending_barcode:
@@ -442,6 +449,7 @@ class ProductDialog(QDialog):
         name = self.name_input.text().strip()
         price_text = self.price_input.text().strip()
         category = self.category_input.text().strip()
+        stock_text = self.stock_input.text().strip()
         requires_weight = self.requires_weight_checkbox.isChecked()
 
         if not name:
@@ -456,7 +464,15 @@ class ProductDialog(QDialog):
             self.show_error("Please enter a valid price.")
             return None
 
-        return name, price, category, requires_weight, self.image_path, barcodes
+        try:
+            stock_qty = float(stock_text)
+            if stock_qty < 0:
+                raise ValueError
+        except ValueError:
+            self.show_error("Please enter a valid stock quantity.")
+            return None
+
+        return name, price, category, stock_qty, requires_weight, self.image_path, barcodes
 
     def choose_image(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -590,9 +606,9 @@ class ProductManagementWindow(QWidget):
         layout.setSpacing(12)
 
         self.products_table = QTableWidget()
-        self.products_table.setColumnCount(8)
+        self.products_table.setColumnCount(9)
         self.products_table.setHorizontalHeaderLabels(
-            ["No", "Image", "Product Name", "Barcodes", "Price", "Category", "Requires Weight", "Actions"]
+            ["No", "Image", "Product Name", "Barcodes", "Price", "Stock", "Category", "Requires Weight", "Actions"]
         )
         self.products_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.products_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -612,12 +628,13 @@ class ProductManagementWindow(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
         self.products_table.setColumnWidth(1, 82)
         self.products_table.setColumnWidth(3, 220)
-        self.products_table.setColumnWidth(7, 170)
+        self.products_table.setColumnWidth(8, 170)
 
         layout.addWidget(self.products_table, 1)
         return panel
@@ -635,6 +652,7 @@ class ProductManagementWindow(QWidget):
                 product["name"] or "",
                 self.format_barcodes_for_table(barcodes),
                 f'{float(product["price"]):.2f}',
+                f'{float(product.get("stock_qty") or 0):g}',
                 product["category"] or "",
                 "Yes" if product["requires_weight"] else "No",
             ]
@@ -643,7 +661,7 @@ class ProductManagementWindow(QWidget):
                 table_item = QTableWidgetItem(value)
                 if column_index == 0:
                     table_item.setData(Qt.ItemDataRole.UserRole, int(product["id"]))
-                if column_index in (2, 3, 5):
+                if column_index in (2, 3, 6):
                     table_item.setTextAlignment(
                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
                     )
@@ -658,7 +676,7 @@ class ProductManagementWindow(QWidget):
             )
             self.products_table.setCellWidget(
                 row_index,
-                7,
+                8,
                 self.create_action_buttons(int(product["id"])),
             )
 
