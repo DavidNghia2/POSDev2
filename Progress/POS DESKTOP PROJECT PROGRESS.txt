@@ -42,6 +42,14 @@ Last Updated: 2026-05-16
   New: receipt is created/displayed only after successful payment completion.
   Changed: payment flow now waits for accepted dialog result before finalizing and showing receipt.
 
+- Old: Manager Dashboard displayed static startup values and did not refresh after new sales.
+  New: Manager Dashboard reloads through the global refresh flow.
+  Changed: added dashboard reload behavior and connected it to app-wide refresh.
+
+- Old: dashboards could miscount "today" because created_at is stored in UTC while the UI is read in local time.
+  New: Admin, Manager, and Cashier dashboards use consistent local-day calculations.
+  Changed: date filters now use date/datetime(created_at, 'localtime') to avoid midnight boundary drift.
+
 - Old: Product Management used split-screen form + table.
   New: main page is list-focused and Add/Edit use modal dialogs.
   Changed: removed the left Product Details panel and added reusable ProductDialog.
@@ -132,7 +140,18 @@ Last Updated: 2026-05-16
 - Receipt includes method, items, total, tendered, and change.
 - Pre-payment receipt preview flow has been removed.
 
-8. Product Management
+8. Dashboards
+- Cashier Dashboard:
+  + reloadable
+  + Today's Sales, Revenue, and Items Sold use local-day logic
+- Manager Dashboard:
+  + reloadable
+  + Revenue, Transactions, and Avg. Sale use local-day logic
+- Admin Dashboard:
+  + keeps load_dashboard_data() and date filters
+  + summary, payment breakdown, and top products now use local time consistently
+
+9. Product Management
 - Main page now contains only:
   + Search
   + Add Product
@@ -151,12 +170,12 @@ Last Updated: 2026-05-16
   + stock quantity
   + duplicate-barcode validation
 
-9. Login and Session
+10. Login and Session
 - “Keep me logged in” now persists the user session.
 - Restarting the app can restore the last user automatically.
 - Logout clears persisted session and returns to login.
 
-10. How To Run
+11. How To Run
 - Setup:
   .\setup.ps1
 - Run app:
@@ -164,7 +183,7 @@ Last Updated: 2026-05-16
 - Legacy command:
   .\.venv\Scripts\python.exe pos_terminal.py
 
-11. Verification Completed
+12. Verification Completed
 - Compile:
   + python -m compileall main.py login database pos_terminal product_management admin ui
 - Temporary database checks:
@@ -176,8 +195,10 @@ Last Updated: 2026-05-16
   + no receipt on rejected payment dialog
   + ProductDialog add/edit flow
   + row-level Product Management actions
+  + Manager Dashboard refresh after a new sale
+  + Admin Dashboard local-day behavior around midnight UTC
 
-12. Recommended Next Work
+13. Recommended Next Work
 - Expand Inventory UI later if you need stock adjustments, stock movement history, or multi-branch inventory.
 - Add Sales History page.
 - Add receipt number / sale_id to receipt.
@@ -189,7 +210,7 @@ Last Updated: 2026-05-16
 - Add tax/VAT/service charge.
 - Add explicit migration versioning.
 
-13. Developer Notes
+14. Developer Notes
 - Keep raw SQL in database/db.py where possible.
 - Any page that writes DB should emit data_changed after changes.
 - Any page that needs refresh support should expose reload_data().

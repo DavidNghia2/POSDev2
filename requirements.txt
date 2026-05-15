@@ -1,3 +1,5 @@
+# Runtime dependencies for Retail POS.
+# Python itself is selected by setup.ps1 (default: 3.12).
+
 PyQt6==6.7.1
-Python==3.12
-qtawesome>=1.4.2
+qtawesome>=1.4.2,<2.0.0

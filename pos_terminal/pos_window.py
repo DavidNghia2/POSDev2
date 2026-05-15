@@ -43,6 +43,7 @@ from admin.audit_logs_window import create_audit_logs
 from admin.settings_window import create_settings
 
 from login import add_cash_movement, clear_session, has_permission, log_audit, open_cash_shift
+from ui.app_branding import apply_app_icon, app_logo_pixmap
 
 
 ACCENT_BLUE = "#2563EB"
@@ -96,12 +97,39 @@ class ActionButton(QPushButton):
         self.setMinimumHeight(48)
 
 
+class DashboardCard(QFrame):
+    def __init__(self, title: str, value: str, subtitle: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("dashboardCard")
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(6)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("dashboardCardTitle")
+
+        self.value_label = QLabel(value)
+        self.value_label.setObjectName("dashboardCardValue")
+
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("dashboardCardSubtitle")
+
+        layout.addWidget(title_label)
+        layout.addWidget(self.value_label)
+        layout.addWidget(subtitle_label)
+
+    def set_value(self, value: str) -> None:
+        self.value_label.setText(value)
+
+
 class PosMainWindow(QMainWindow):
     app_data_changed = pyqtSignal()
 
     def __init__(self, user_data: dict | None = None) -> None:
         super().__init__()
         self.setWindowTitle("POS Sales Terminal")
+        apply_app_icon(self)
         self.resize(1420, 860)
         self.setMinimumSize(1180, 720)
 
@@ -232,7 +260,7 @@ class PosMainWindow(QMainWindow):
                 """
                 SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS total
                 FROM sales
-                WHERE date(created_at) = date(?) AND status = 'completed'
+                WHERE date(created_at, 'localtime') = date(?) AND status = 'completed'
                 """,
                 (today,),
             ).fetchone()
@@ -241,7 +269,7 @@ class PosMainWindow(QMainWindow):
                 SELECT COALESCE(SUM(si.qty), 0) AS items
                 FROM sale_items si
                 JOIN sales s ON s.id = si.sale_id
-                WHERE date(s.created_at) = date(?) AND s.status = 'completed'
+                WHERE date(s.created_at, 'localtime') = date(?) AND s.status = 'completed'
                 """,
                 (today,),
             ).fetchone()
@@ -255,26 +283,8 @@ class PosMainWindow(QMainWindow):
             "average_sale": total / count if count else 0,
         }
 
-    def create_dashboard_card(self, title: str, value: str, subtitle: str) -> QFrame:
-        card = QFrame()
-        card.setObjectName("dashboardCard")
-        layout = QVBoxLayout(card)
-        layout.setContentsMargins(18, 16, 18, 16)
-        layout.setSpacing(6)
-
-        title_label = QLabel(title)
-        title_label.setObjectName("dashboardCardTitle")
-
-        value_label = QLabel(value)
-        value_label.setObjectName("dashboardCardValue")
-
-        subtitle_label = QLabel(subtitle)
-        subtitle_label.setObjectName("dashboardCardSubtitle")
-
-        layout.addWidget(title_label)
-        layout.addWidget(value_label)
-        layout.addWidget(subtitle_label)
-        return card
+    def create_dashboard_card(self, title: str, value: str, subtitle: str) -> DashboardCard:
+        return DashboardCard(title, value, subtitle)
 
     def create_dashboard_button(self, text: str, page_key: str, style_name: str = "primary") -> QPushButton:
         button = QPushButton(text)
@@ -293,7 +303,6 @@ class PosMainWindow(QMainWindow):
         return button
 
     def create_cashier_dashboard(self) -> QWidget:
-        summary = self.get_today_summary()
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(28, 24, 28, 28)
@@ -309,9 +318,12 @@ class PosMainWindow(QMainWindow):
 
         stats = QHBoxLayout()
         stats.setSpacing(14)
-        stats.addWidget(self.create_dashboard_card("Today's Sales", f"{summary['sales_count']}", "Transactions completed"))
-        stats.addWidget(self.create_dashboard_card("Revenue", f"${summary['sales_total']:,.2f}", "Collected today"))
-        stats.addWidget(self.create_dashboard_card("Items Sold", f"{summary['items_sold']:g}", "Units and weighted items"))
+        sales_count_card = self.create_dashboard_card("Today's Sales", "0", "Transactions completed")
+        revenue_card = self.create_dashboard_card("Revenue", "$0.00", "Collected today")
+        items_sold_card = self.create_dashboard_card("Items Sold", "0", "Units and weighted items")
+        stats.addWidget(sales_count_card)
+        stats.addWidget(revenue_card)
+        stats.addWidget(items_sold_card)
         layout.addLayout(stats)
 
         actions = QHBoxLayout()
@@ -320,10 +332,18 @@ class PosMainWindow(QMainWindow):
         actions.addWidget(self.create_dashboard_button("Continue Shift", "pos_terminal", "secondary"))
         layout.addLayout(actions)
         layout.addStretch()
+
+        def reload_dashboard() -> None:
+            summary = self.get_today_summary()
+            sales_count_card.set_value(f"{summary['sales_count']}")
+            revenue_card.set_value(f"${summary['sales_total']:,.2f}")
+            items_sold_card.set_value(f"{summary['items_sold']:g}")
+
+        page.reload_data = reload_dashboard  # type: ignore[attr-defined]
+        reload_dashboard()
         return page
 
     def create_manager_dashboard(self) -> QWidget:
-        summary = self.get_today_summary()
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(28, 24, 28, 28)
@@ -337,9 +357,12 @@ class PosMainWindow(QMainWindow):
 
         stats = QHBoxLayout()
         stats.setSpacing(14)
-        stats.addWidget(self.create_dashboard_card("Revenue", f"${summary['sales_total']:,.2f}", "Completed sales today"))
-        stats.addWidget(self.create_dashboard_card("Transactions", f"{summary['sales_count']}", "Sales count today"))
-        stats.addWidget(self.create_dashboard_card("Avg. Sale", f"${summary['average_sale']:,.2f}", "Average transaction"))
+        revenue_card = self.create_dashboard_card("Revenue", "$0.00", "Completed sales today")
+        transactions_card = self.create_dashboard_card("Transactions", "0", "Sales count today")
+        average_sale_card = self.create_dashboard_card("Avg. Sale", "$0.00", "Average transaction")
+        stats.addWidget(revenue_card)
+        stats.addWidget(transactions_card)
+        stats.addWidget(average_sale_card)
         layout.addLayout(stats)
 
         actions = QHBoxLayout()
@@ -350,6 +373,15 @@ class PosMainWindow(QMainWindow):
             actions.addWidget(self.create_dashboard_button("Product Management", "products", "secondary"))
         layout.addLayout(actions)
         layout.addStretch()
+
+        def reload_dashboard() -> None:
+            summary = self.get_today_summary()
+            revenue_card.set_value(f"${summary['sales_total']:,.2f}")
+            transactions_card.set_value(f"{summary['sales_count']}")
+            average_sale_card.set_value(f"${summary['average_sale']:,.2f}")
+
+        page.reload_data = reload_dashboard  # type: ignore[attr-defined]
+        reload_dashboard()
         return page
 
     def create_sidebar(self) -> QWidget:
@@ -361,13 +393,30 @@ class PosMainWindow(QMainWindow):
         layout.setContentsMargins(20, 24, 20, 24)
         layout.setSpacing(10)
 
+        brand_row = QHBoxLayout()
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        brand_row.setSpacing(12)
+
+        logo_label = QLabel()
+        logo_label.setObjectName("brandLogo")
+        logo_label.setFixedSize(42, 42)
+        logo_label.setPixmap(app_logo_pixmap(42))
+
+        brand_text = QVBoxLayout()
+        brand_text.setContentsMargins(0, 0, 0, 0)
+        brand_text.setSpacing(1)
+
         title = QLabel("Retail POS")
         title.setObjectName("appTitle")
-        layout.addWidget(title)
 
         subtitle = QLabel("Sales Terminal")
         subtitle.setObjectName("appSubtitle")
-        layout.addWidget(subtitle)
+
+        brand_text.addWidget(title)
+        brand_text.addWidget(subtitle)
+        brand_row.addWidget(logo_label)
+        brand_row.addLayout(brand_text, 1)
+        layout.addLayout(brand_row)
         layout.addSpacing(22)
 
         self.sidebar_buttons = []

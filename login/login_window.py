@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.icon_manager import IconManager
 
 
@@ -646,6 +647,7 @@ class LoginWindow(QDialog):
 
     def init_ui(self) -> None:
         self.setWindowTitle("Retail POS - Sign In")
+        apply_app_icon(self)
         self.setFixedSize(1040, 700)
         self.setModal(True)
 
@@ -665,17 +667,32 @@ class LoginWindow(QDialog):
         tablet_layout.setContentsMargins(82, 58, 62, 38)
         tablet_layout.setSpacing(18)
 
-        heading = QVBoxLayout()
-        heading.setSpacing(4)
+        heading = QHBoxLayout()
+        heading.setSpacing(14)
+
+        logo_label = QLabel()
+        logo_label.setObjectName("brandLogo")
+        logo_label.setFixedSize(54, 54)
+        logo_label.setPixmap(app_logo_pixmap(54))
+
+        heading_text = QVBoxLayout()
+        heading_text.setSpacing(4)
 
         title_label = QLabel("Retail POS")
         title_label.setObjectName("appTitle")
 
-        subtitle_label = QLabel("Offline inventory and sales management system")
+        subtitle_label = QLabel("Inventory and sales management system")
         subtitle_label.setObjectName("appSubtitle")
 
-        heading.addWidget(title_label)
-        heading.addWidget(subtitle_label)
+        credit_label = QLabel("Created by DevTeam2 SWUST")
+        credit_label.setObjectName("creatorCredit")
+
+        heading_text.addWidget(title_label)
+        heading_text.addWidget(subtitle_label)
+        heading_text.addWidget(credit_label)
+        heading.addWidget(logo_label)
+        heading.addLayout(heading_text)
+        heading.addStretch(1)
         tablet_layout.addLayout(heading)
 
         content = QHBoxLayout()
@@ -890,6 +907,12 @@ class LoginWindow(QDialog):
                 color: #0F1115;
                 font-size: 16px;
                 font-weight: 700;
+            }
+
+            #creatorCredit {
+                color: #64748B;
+                font-size: 11px;
+                font-weight: 600;
             }
 
             #loginCard {

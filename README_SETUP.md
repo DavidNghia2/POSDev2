@@ -1,5 +1,10 @@
 # POS App Setup
 
+Requirements:
+
+- Python 3.11+ recommended
+- PowerShell on Windows
+
 Run this in PowerShell at the project folder:
 
 ```powershell
@@ -20,4 +25,6 @@ If Python 3.12 is not found:
 
 The app uses `pos.db` in the project folder. Product Management and POS Terminal both read and write products through the same SQLite database.
 
-Under 'Progress,' I've listed everything I’ve completed for the project. If you work on something, please update it there. Also, make sure to sync the data on GitHub first before uploading your local changes.
+The app logo is stored at `assets/app_logo.png`; keep that file in the project when copying or packaging the app.
+
+Under `Progress`, I've listed everything completed for the project. If you work on something, please update it there. Also, make sure to sync the data on GitHub first before uploading your local changes.

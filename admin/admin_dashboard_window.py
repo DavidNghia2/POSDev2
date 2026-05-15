@@ -26,7 +26,8 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
             """
             SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
             FROM sales
-            WHERE created_at >= ? AND created_at <= ?
+            WHERE datetime(created_at, 'localtime') >= datetime(?)
+              AND datetime(created_at, 'localtime') <= datetime(?)
               AND status = 'completed'
             """,
             (start_date, end_date),
@@ -39,7 +40,10 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
             SELECT COALESCE(SUM(qty), 0) as items_sold
             FROM sale_items
             WHERE sale_id IN (
-                SELECT id FROM sales WHERE created_at >= ? AND created_at <= ?
+                SELECT id
+                FROM sales
+                WHERE datetime(created_at, 'localtime') >= datetime(?)
+                  AND datetime(created_at, 'localtime') <= datetime(?)
                 AND status = 'completed'
             )
             """,
@@ -54,14 +58,16 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
                 SELECT sp.sale_id, sp.method as payment_method, sp.amount
                 FROM sale_payments sp
                 JOIN sales s ON s.id = sp.sale_id
-                WHERE s.created_at >= ? AND s.created_at <= ?
+                WHERE datetime(s.created_at, 'localtime') >= datetime(?)
+                  AND datetime(s.created_at, 'localtime') <= datetime(?)
                   AND s.status = 'completed'
 
                 UNION ALL
 
                 SELECT s.id as sale_id, s.payment_method, s.total_amount as amount
                 FROM sales s
-                WHERE s.created_at >= ? AND s.created_at <= ?
+                WHERE datetime(s.created_at, 'localtime') >= datetime(?)
+                  AND datetime(s.created_at, 'localtime') <= datetime(?)
                   AND s.status = 'completed'
                   AND NOT EXISTS (
                       SELECT 1 FROM sale_payments sp WHERE sp.sale_id = s.id
@@ -84,7 +90,7 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
             """
             SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
             FROM sales
-            WHERE date(created_at) = date(?)
+            WHERE date(created_at, 'localtime') = date(?)
               AND status = 'completed'
             """,
             (today,),
@@ -133,7 +139,8 @@ def get_top_products(start_date: str, end_date: str, limit: int = 5) -> list:
                 LEFT JOIN products product_by_barcode
                     ON si.product_id IS NULL
                    AND product_by_barcode.barcode = si.barcode
-                WHERE s.created_at >= ? AND s.created_at <= ?
+                WHERE datetime(s.created_at, 'localtime') >= datetime(?)
+                  AND datetime(s.created_at, 'localtime') <= datetime(?)
                   AND s.status = 'completed'
             )
             SELECT barcode, name, SUM(qty) as total_qty, SUM(subtotal) as total_sales

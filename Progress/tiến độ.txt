@@ -42,6 +42,14 @@ Cap nhat gan nhat: 2026-05-16
   Chuc nang moi: Hoa don chi duoc tao/hien sau khi thanh toan thanh cong.
   Da sua: Sua lai luong payment -> dialog accepted -> moi finalize payment va hien receipt.
 
+- Chuc nang cu: Manager Dashboard hien du lieu tinh, khong tu cap nhat sau giao dich moi.
+  Chuc nang moi: Manager Dashboard co the reload va cap nhat theo signal toan app.
+  Da sua: Them reload_data cho dashboard Manager va noi vao he thong refresh chung.
+
+- Chuc nang cu: Dashboard co the tinh sai du lieu "hom nay" do created_at luu UTC nhung UI loc theo ngay local.
+  Chuc nang moi: Admin, Manager va Cashier Dashboard deu tinh ngay theo local time thong nhat.
+  Da sua: Doi truy van ngay sang date/datetime(created_at, 'localtime') de khong bi lech ngay gan nua dem.
+
 - Chuc nang cu: Product Management chia doi man hinh, form ben trai va bang ben phai.
   Chuc nang moi: Product Management chi con man danh sach, thao tac them/sua bang popup modal.
   Da sua: Bo panel Product Details ben trai, tao ProductDialog dung chung cho Add Product va Edit Product.
@@ -159,7 +167,18 @@ Cap nhat gan nhat: 2026-05-16
   + Gom payment method, item, total, tendered, change.
 - Khong con luong preview hoa don truoc khi giao dich thanh cong.
 
-8. Product Management hien tai
+8. Dashboard hien tai
+- Cashier Dashboard:
+  + Co the reload du lieu.
+  + Hien Today's Sales, Revenue, Items Sold theo ngay local.
+- Manager Dashboard:
+  + Co the reload du lieu.
+  + Hien Revenue, Transactions, Avg. Sale theo ngay local.
+- Admin Dashboard:
+  + Co load_dashboard_data() va ho tro bo loc ngay.
+  + Cac truy van tong hop, payment breakdown va top products deu dung local time.
+
+9. Product Management hien tai
 - Man chinh chi gom:
   + Search
   + Add Product
@@ -179,7 +198,7 @@ Cap nhat gan nhat: 2026-05-16
   + Stock Quantity.
   + Validate barcode trung.
 
-9. Dang nhap va phien lam viec
+10. Dang nhap va phien lam viec
 - Login co toggle "Keep me logged in".
 - Neu bat toggle:
   + user id duoc luu trong settings.
@@ -188,7 +207,7 @@ Cap nhat gan nhat: 2026-05-16
   + Xoa session.
   + Quay lai man login.
 
-10. Cach chay app
+11. Cach chay app
 - Cai moi truong:
   .\setup.ps1
 - Chay app:
@@ -196,7 +215,7 @@ Cap nhat gan nhat: 2026-05-16
 - Lenh cu van chay duoc:
   .\.venv\Scripts\python.exe pos_terminal.py
 
-11. Kiem tra da chay
+12. Kiem tra da chay
 - Compile:
   + python -m compileall main.py login database pos_terminal product_management admin ui
 - Test database tam:
@@ -208,8 +227,10 @@ Cap nhat gan nhat: 2026-05-16
   + Khong hien receipt neu payment dialog bi reject.
   + Modal Add/Edit Product.
   + Bang Product Management co action buttons theo dong.
+  + Manager Dashboard reload duoc sau giao dich moi.
+  + Admin Dashboard doc dung giao dich gan nua dem theo ngay local.
 
-12. Viec nen lam tiep
+13. Viec nen lam tiep
 - Mo rong Inventory UI neu can nhap/xuat kho, lich su dieu chinh va ton theo chi nhanh.
 - Them sale history page.
 - Them receipt number / sale_id vao receipt.
@@ -221,7 +242,7 @@ Cap nhat gan nhat: 2026-05-16
 - Them tax/VAT/service charge.
 - Them migration versioning ro rang hon.
 
-13. Ghi chu cho nguoi tiep tuc code
+14. Ghi chu cho nguoi tiep tuc code
 - Han che viet SQL truc tiep trong UI; nen dat helper vao database/db.py.
 - Page nao ghi DB thi nen emit data_changed sau khi thay doi.
 - Page nao can refresh thi nen co reload_data().
@@ -230,3 +251,48 @@ Cap nhat gan nhat: 2026-05-16
 - Neu sua login/session thi xem login/login_window.py.
 - Neu sua schema/helper thi xem database/db.py.
 - pos.db la runtime database, du lieu co the khac giua cac may.
+
+
+Thiết kế khi đi online và xuất ra app :
+
+1. Khi xuất `.exe`
+- `.exe` chỉ chứa chương trình.
+- Dữ liệu người dùng không nằm trong `.exe`.
+- Khi chạy lần đầu:
+  - app tự tạo database mới ở thư mục riêng của máy người dùng
+  - ví dụ: `AppData/Roaming/YourPOS/pos.db`
+- Khi cập nhật bản mới:
+  - giữ database cũ
+  - chỉ chạy migration để nâng cấu trúc bảng nếu cần
+
+2. Cấu trúc dữ liệu nên tách
+- `schema/migrations`: tạo và nâng cấp database
+- `seed data`: dữ liệu mặc định ban đầu nếu cần
+- `user data`: database thật của khách hàng, nằm ngoài app
+
+3. Khi làm online
+- Server database = dữ liệu chính
+- Local database = dữ liệu offline/cache
+- Mỗi bảng quan trọng nên có:
+  - `id`
+  - `updated_at`
+  - `deleted_at` hoặc `is_deleted`
+  - `sync_status`
+- Khi mất mạng:
+  - app vẫn bán hàng bằng local DB
+- Khi có mạng lại:
+  - đẩy thay đổi lên server
+  - kéo thay đổi mới từ server xuống
+
+4. Nên chuẩn bị từ bây giờ
+- Có hệ thống migration version rõ ràng
+- Không hardcode đường dẫn `pos.db` trong thư mục source
+- Dùng UUID hoặc ID ổn định nếu sau này sync nhiều máy
+- Có bảng `sync_queue` để lưu các thay đổi chưa gửi lên server
+
+Tóm gọn:
+- Desktop offline: local DB riêng theo từng máy
+- Cập nhật app: migrate, không ghi đè data
+- Online sau này: server là nguồn chuẩn, local DB giúp offline-first
+
+Nếu muốn, mình có thể nói tiếp cho bạn “nên có những bảng nào khi làm online” trong 1 danh sách ngắn.
