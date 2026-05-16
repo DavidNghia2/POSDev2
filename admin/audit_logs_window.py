@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 from login import get_audit_logs
 from ui.icon_manager import IconManager
+from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 def row_value(row, key: str, default: str = ""):
@@ -261,7 +262,7 @@ class AuditLogsWindow(QWidget):
                 border-bottom: 1px solid #EDF1F5;
                 padding: 8px;
             }
-            """
+            """ + MODERN_WIDGET_STYLESHEET
         )
 
     def showEvent(self, event) -> None:

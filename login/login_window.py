@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.icon_manager import IconManager
+from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 DB_PATH = Path(__file__).resolve().parents[1] / "pos.db"
@@ -1027,7 +1028,7 @@ class LoginWindow(QDialog):
                 font-weight: 700;
             }
 
-            """
+            """ + MODERN_WIDGET_STYLESHEET
         )
 
 

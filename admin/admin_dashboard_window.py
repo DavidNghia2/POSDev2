@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 
 from database import db
 from ui.icon_manager import IconManager
+from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 def get_sales_summary(start_date: str, end_date: str) -> dict:
@@ -534,7 +535,7 @@ class AdminDashboardWindow(QWidget):
                 border: none;
                 width: 24px;
             }
-            """
+            """ + MODERN_WIDGET_STYLESHEET
         )
 
     def showEvent(self, event) -> None:

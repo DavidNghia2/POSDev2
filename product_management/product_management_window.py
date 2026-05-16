@@ -25,7 +25,9 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
+from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 PRODUCT_MANAGEMENT_STYLESHEET = """
@@ -226,7 +228,7 @@ QTableWidget::item {
     border-bottom: 1px solid #EDF1F5;
     padding: 8px;
 }
-"""
+""" + MODERN_WIDGET_STYLESHEET
 
 
 def set_label_pixmap(
@@ -702,14 +704,10 @@ class ProductManagementWindow(QWidget):
             self.data_changed.emit()
 
     def delete_product(self, product_id: int) -> None:
-        reply = QMessageBox.question(
+        if not confirm_delete(
             self,
-            "Confirm Delete",
             "Are you sure you want to delete this product?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if reply != QMessageBox.StandardButton.Yes:
+        ):
             return
 
         db.delete_product(product_id)

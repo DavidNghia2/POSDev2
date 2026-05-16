@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
 
 from database import db
 from ui.icon_manager import IconManager
+from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 def get_sales_report(start_date: str, end_date: str) -> list:
@@ -493,7 +494,7 @@ class ReportsWindow(QWidget):
                 border-bottom: 1px solid #EDF1F5;
                 padding: 8px;
             }
-            """
+            """ + MODERN_WIDGET_STYLESHEET
         )
 
     def showEvent(self, event) -> None:

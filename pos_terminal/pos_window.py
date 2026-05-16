@@ -1,9 +1,10 @@
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from textwrap import wrap
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -25,7 +26,6 @@ from PyQt6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -42,8 +42,10 @@ from admin.reports_window import create_reports
 from admin.audit_logs_window import create_audit_logs
 from admin.settings_window import create_settings
 
-from login import add_cash_movement, clear_session, has_permission, log_audit, open_cash_shift
+from login import add_cash_movement, clear_session, get_setting, has_permission, log_audit, open_cash_shift
 from ui.app_branding import apply_app_icon, app_logo_pixmap
+from ui.qr_display import qr_focus_pixmap
+from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 ACCENT_BLUE = "#2563EB"
@@ -54,6 +56,9 @@ TEXT_MUTED = "#5F6B7A"
 BORDER = "#D7DEE8"
 PANEL_BG = "#F5F7FA"
 WINDOW_BG = "#EEF2F6"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PAYMENT_QR_DISPLAY_SIZE = 280
+SPLIT_PAYMENT_QR_DISPLAY_SIZE = 210
 
 
 @dataclass
@@ -86,7 +91,7 @@ class KeypadButton(QPushButton):
     def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(52)
+        self.setMinimumHeight(46)
 
 
 class ActionButton(QPushButton):
@@ -94,7 +99,7 @@ class ActionButton(QPushButton):
         super().__init__(text, parent)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setProperty("role", style_name)
-        self.setMinimumHeight(48)
+        self.setMinimumHeight(42)
 
 
 class DashboardCard(QFrame):
@@ -253,6 +258,114 @@ class PosMainWindow(QMainWindow):
             self.load_product_grid()
         self.refresh_total()
 
+    def get_setting_bool(self, key: str, default: bool = True) -> bool:
+        value = get_setting(key)
+        if value is None:
+            return default
+        return value.strip().lower() not in {"false", "0", "no", "off"}
+
+    def get_currency_symbol(self) -> str:
+        return get_setting("currency_symbol") or get_setting("currency") or "$"
+
+    def format_money(self, amount: float, currency_symbol: str | None = None) -> str:
+        symbol = currency_symbol if currency_symbol is not None else self.get_currency_symbol()
+        return f"{symbol or '$'}{amount:,.2f}"
+
+    def resolve_setting_path(self, path_value: str) -> Path | None:
+        if not path_value:
+            return None
+
+        path = Path(path_value)
+        if not path.is_absolute():
+            path = PROJECT_ROOT / path
+        return path if path.exists() else None
+
+    def get_receipt_settings(self) -> dict[str, str]:
+        return {
+            "store_name": get_setting("store_name") or "",
+            "store_address": get_setting("store_address") or "",
+            "store_phone": get_setting("store_phone") or "",
+            "store_email": get_setting("store_email") or "",
+            "currency_symbol": self.get_currency_symbol(),
+            "receipt_header": get_setting("receipt_header") or "",
+            "receipt_footer": get_setting("receipt_footer") or "",
+        }
+
+    def get_payment_settings(self) -> dict[str, object]:
+        return {
+            "enable_bank_transfer": self.get_setting_bool("enable_bank_transfer", True),
+            "bank_qr_path": self.resolve_setting_path(get_setting("bank_qr_image_path") or ""),
+            "bank_name": get_setting("bank_name") or "",
+            "account_name": get_setting("account_name") or get_setting("bank_account_name") or "",
+            "account_number": get_setting("account_number") or get_setting("bank_account_number") or "",
+        }
+
+    def create_bank_qr_panel(
+        self,
+        payment_settings: dict[str, object] | None = None,
+        qr_size: int = PAYMENT_QR_DISPLAY_SIZE,
+        title: str = "Scan Bank Transfer QR",
+    ) -> QFrame:
+        payment_settings = payment_settings or self.get_payment_settings()
+        bank_transfer_enabled = bool(payment_settings["enable_bank_transfer"])
+        bank_qr_path = payment_settings["bank_qr_path"]
+        bank_name = str(payment_settings["bank_name"])
+        account_name = str(payment_settings["account_name"])
+        account_number = str(payment_settings["account_number"])
+
+        bank_qr_panel = QFrame()
+        bank_qr_panel.setObjectName("paymentQrPanel")
+        bank_qr_layout = QVBoxLayout(bank_qr_panel)
+        bank_qr_layout.setContentsMargins(14, 14, 14, 14)
+        bank_qr_layout.setSpacing(10)
+
+        qr_title = QLabel(title)
+        qr_title.setObjectName("paymentFieldLabel")
+        qr_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        empty_message = (
+            "No QR image configured"
+            if bank_transfer_enabled
+            else "Bank Transfer disabled in Settings"
+        )
+        qr_image_label = QLabel(empty_message)
+        qr_image_label.setObjectName("paymentQrPreview")
+        qr_image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_image_label.setFixedSize(qr_size, qr_size)
+        qr_image_label.setWordWrap(True)
+
+        if bank_transfer_enabled and isinstance(bank_qr_path, Path):
+            qr_pixmap = qr_focus_pixmap(bank_qr_path, qr_size)
+            if not qr_pixmap.isNull():
+                qr_image_label.setText("")
+                qr_image_label.setPixmap(qr_pixmap)
+
+        bank_detail_lines = []
+        if bank_name:
+            bank_detail_lines.append(f"Bank: {bank_name}")
+        if account_name:
+            bank_detail_lines.append(f"Account: {account_name}")
+        if account_number:
+            bank_detail_lines.append(f"No: {account_number}")
+
+        bank_detail_text = "\n".join(bank_detail_lines)
+        if not bank_detail_text:
+            bank_detail_text = (
+                "Add bank details in Settings."
+                if bank_transfer_enabled
+                else "Enable Bank Transfer in Settings to use QR payment."
+            )
+
+        bank_detail_label = QLabel(bank_detail_text)
+        bank_detail_label.setObjectName("paymentQrDetails")
+        bank_detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        bank_detail_label.setWordWrap(True)
+
+        bank_qr_layout.addWidget(qr_title, 0, Qt.AlignmentFlag.AlignCenter)
+        bank_qr_layout.addWidget(qr_image_label, 0, Qt.AlignmentFlag.AlignCenter)
+        bank_qr_layout.addWidget(bank_detail_label)
+        return bank_qr_panel
+
     def get_today_summary(self) -> dict[str, float | int]:
         today = datetime.now().strftime("%Y-%m-%d")
         with db.get_connection() as connection:
@@ -290,7 +403,7 @@ class PosMainWindow(QMainWindow):
         button = QPushButton(text)
         button.setObjectName("dashboardActionButton")
         button.setProperty("role", style_name)
-        button.setMinimumHeight(48)
+        button.setMinimumHeight(42)
         page_icon = {
             "pos_terminal": "terminal",
             "reports": "reports",
@@ -319,7 +432,7 @@ class PosMainWindow(QMainWindow):
         stats = QHBoxLayout()
         stats.setSpacing(14)
         sales_count_card = self.create_dashboard_card("Today's Sales", "0", "Transactions completed")
-        revenue_card = self.create_dashboard_card("Revenue", "$0.00", "Collected today")
+        revenue_card = self.create_dashboard_card("Revenue", self.format_money(0), "Collected today")
         items_sold_card = self.create_dashboard_card("Items Sold", "0", "Units and weighted items")
         stats.addWidget(sales_count_card)
         stats.addWidget(revenue_card)
@@ -336,7 +449,7 @@ class PosMainWindow(QMainWindow):
         def reload_dashboard() -> None:
             summary = self.get_today_summary()
             sales_count_card.set_value(f"{summary['sales_count']}")
-            revenue_card.set_value(f"${summary['sales_total']:,.2f}")
+            revenue_card.set_value(self.format_money(float(summary["sales_total"])))
             items_sold_card.set_value(f"{summary['items_sold']:g}")
 
         page.reload_data = reload_dashboard  # type: ignore[attr-defined]
@@ -357,9 +470,9 @@ class PosMainWindow(QMainWindow):
 
         stats = QHBoxLayout()
         stats.setSpacing(14)
-        revenue_card = self.create_dashboard_card("Revenue", "$0.00", "Completed sales today")
+        revenue_card = self.create_dashboard_card("Revenue", self.format_money(0), "Completed sales today")
         transactions_card = self.create_dashboard_card("Transactions", "0", "Sales count today")
-        average_sale_card = self.create_dashboard_card("Avg. Sale", "$0.00", "Average transaction")
+        average_sale_card = self.create_dashboard_card("Avg. Sale", self.format_money(0), "Average transaction")
         stats.addWidget(revenue_card)
         stats.addWidget(transactions_card)
         stats.addWidget(average_sale_card)
@@ -376,9 +489,9 @@ class PosMainWindow(QMainWindow):
 
         def reload_dashboard() -> None:
             summary = self.get_today_summary()
-            revenue_card.set_value(f"${summary['sales_total']:,.2f}")
+            revenue_card.set_value(self.format_money(float(summary["sales_total"])))
             transactions_card.set_value(f"{summary['sales_count']}")
-            average_sale_card.set_value(f"${summary['average_sale']:,.2f}")
+            average_sale_card.set_value(self.format_money(float(summary["average_sale"])))
 
         page.reload_data = reload_dashboard  # type: ignore[attr-defined]
         reload_dashboard()
@@ -493,7 +606,7 @@ class PosMainWindow(QMainWindow):
         logout_button.clicked.connect(self.request_logout)
         layout.addWidget(logout_button)
 
-        footer = QLabel("SQLite Desktop Mode")
+        footer = QLabel("Developed by DevTeam2")
         footer.setObjectName("sidebarFooter")
         layout.addWidget(footer)
 
@@ -653,7 +766,7 @@ class PosMainWindow(QMainWindow):
         barcode_label.setObjectName("productBarcode")
         barcode_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        price_label = QLabel(f"${float(product['price']):,.2f}")
+        price_label = QLabel(self.format_money(float(product["price"])))
         price_label.setObjectName("productPrice")
         price_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
@@ -744,7 +857,7 @@ class PosMainWindow(QMainWindow):
         totals_layout.setContentsMargins(16, 14, 16, 14)
         totals_layout.setSpacing(10)
 
-        self.subtotal_value_label = QLabel("$0.00")
+        self.subtotal_value_label = QLabel(self.format_money(0))
         self.subtotal_value_label.setObjectName("amountValue")
         self.subtotal_value_label.setMinimumWidth(120)
         self.subtotal_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -755,7 +868,7 @@ class PosMainWindow(QMainWindow):
         self.discount_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
         self.discount_input.textChanged.connect(self.refresh_total)
 
-        self.total_value_label = QLabel("$0.00")
+        self.total_value_label = QLabel(self.format_money(0))
         self.total_value_label.setObjectName("totalValue")
         self.total_value_label.setMinimumWidth(140)
         self.total_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -953,8 +1066,8 @@ class PosMainWindow(QMainWindow):
                 item.barcode,
                 item.name,
                 f"{item.qty:g}",
-                f"${item.unit_price:,.2f}",
-                f"${item.subtotal:,.2f}",
+                self.format_money(item.unit_price),
+                self.format_money(item.subtotal),
             ]
             for column, value in enumerate(values):
                 table_item = QTableWidgetItem(value)
@@ -1063,8 +1176,8 @@ class PosMainWindow(QMainWindow):
         discount = min(self.get_discount_amount(), subtotal)
         grand_total = max(subtotal - discount, 0)
 
-        self.subtotal_value_label.setText(f"${subtotal:,.2f}")
-        self.total_value_label.setText(f"${grand_total:,.2f}")
+        self.subtotal_value_label.setText(self.format_money(subtotal))
+        self.total_value_label.setText(self.format_money(grand_total))
 
     def sync_status(self) -> None:
         selected = self.cart_table.currentRow()
@@ -1092,10 +1205,18 @@ class PosMainWindow(QMainWindow):
         self.open_payment_dialog(total_amount)
 
     def finalize_successful_payment(self, payment_result: dict[str, object]) -> None:
+        payment_method = str(payment_result["payment_method"])
+        normalized_payment_method = payment_method.strip().replace("_", " ").lower()
+        success_message = "Payment successful."
+        if normalized_payment_method == "cash":
+            success_message += f"\nChange: {self.format_money(float(payment_result['change_amount']))}"
+        else:
+            success_message += f"\nMethod: {payment_method}"
+
         QMessageBox.information(
             self,
             "Payment Successful",
-            f"Payment successful.\nChange: ${float(payment_result['change_amount']):,.2f}",
+            success_message,
         )
         self.notify_app_data_changed()
         receipt_text = self.build_receipt_text(
@@ -1103,16 +1224,23 @@ class PosMainWindow(QMainWindow):
             total_amount=float(payment_result["total_amount"]),
             tendered_amount=float(payment_result["tendered_amount"]),
             change_amount=float(payment_result["change_amount"]),
-            payment_method=str(payment_result["payment_method"]),
+            payment_method=payment_method,
+            order_id=int(payment_result["sale_id"]) if payment_result.get("sale_id") else None,
+            cashier_name=str(self.user_data.get("full_name") or self.user_data.get("username") or ""),
+            note=str(payment_result.get("note") or ""),
+            payments=payment_result.get("payments") if isinstance(payment_result.get("payments"), list) else None,
         )
         self.show_receipt_preview(receipt_text)
         self.clear_current_sale()
 
     def open_payment_dialog(self, total_amount: float) -> None:
+        payment_settings = self.get_payment_settings()
+        bank_transfer_enabled = bool(payment_settings["enable_bank_transfer"])
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Payment")
         dialog.setModal(True)
-        dialog.resize(720, 470)
+        dialog.resize(820, 640)
 
         root_layout = QVBoxLayout(dialog)
         root_layout.setContentsMargins(24, 24, 24, 24)
@@ -1142,7 +1270,7 @@ class PosMainWindow(QMainWindow):
 
         grand_total_title = QLabel("Total Due")
         grand_total_title.setObjectName("paymentFieldLabel")
-        grand_total_value = QLabel(f"${total_amount:,.2f}")
+        grand_total_value = QLabel(self.format_money(total_amount))
         grand_total_value.setObjectName("paymentGrandTotal")
 
         amount_tendered_input = QLineEdit()
@@ -1151,7 +1279,7 @@ class PosMainWindow(QMainWindow):
         amount_tendered_input.setAlignment(Qt.AlignmentFlag.AlignRight)
         amount_tendered_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
 
-        change_value = QLabel("$0.00")
+        change_value = QLabel(self.format_money(0))
         change_value.setObjectName("paymentChangeValue")
 
         note_input = QLineEdit()
@@ -1190,10 +1318,17 @@ class PosMainWindow(QMainWindow):
         bank_radio = QRadioButton("Bank Transfer")
         bank_radio.setIcon(IconManager.icon("payment"))
         bank_radio.setIconSize(QSize(18, 18))
+        bank_radio.setEnabled(bank_transfer_enabled)
+        if not bank_transfer_enabled:
+            bank_radio.setToolTip("Enable Bank Transfer in Settings first.")
 
         right_layout.addWidget(method_title)
         right_layout.addWidget(cash_radio)
         right_layout.addWidget(bank_radio)
+
+        bank_qr_panel = self.create_bank_qr_panel(payment_settings, PAYMENT_QR_DISPLAY_SIZE)
+        bank_qr_panel.setVisible(False)
+        right_layout.addWidget(bank_qr_panel)
         right_layout.addStretch(1)
 
         content_layout.addWidget(left_panel, 1)
@@ -1228,14 +1363,27 @@ class PosMainWindow(QMainWindow):
             try:
                 tendered_amount = self.parse_money(amount_tendered_input.text() or "0")
             except ValueError:
-                change_value.setText("$0.00")
+                change_value.setText(self.format_money(0))
                 return
-            change_value.setText(f"${max(tendered_amount - total_amount, 0):,.2f}")
+            change_value.setText(self.format_money(max(tendered_amount - total_amount, 0)))
+
+        def toggle_bank_transfer_ui(checked: bool) -> None:
+            bank_qr_panel.setVisible(checked and bank_transfer_enabled)
+            if checked and bank_transfer_enabled:
+                amount_tendered_input.setText(f"{total_amount:.2f}")
 
         payment_result: dict[str, object] | None = None
 
         def confirm_payment() -> None:
             nonlocal payment_result
+            if bank_radio.isChecked() and not bank_transfer_enabled:
+                QMessageBox.warning(
+                    dialog,
+                    "Bank Transfer Disabled",
+                    "Please enable Bank Transfer in Settings before using this payment method.",
+                )
+                return
+
             tendered_amount = get_tendered_amount()
             if tendered_amount is None:
                 return
@@ -1250,6 +1398,8 @@ class PosMainWindow(QMainWindow):
             payment_method = "Cash" if cash_radio.isChecked() else "Bank Transfer"
             change_amount = tendered_amount - total_amount
             sale_items = self.get_sale_items_from_cart_table()
+            note_text = note_input.text().strip()
+            payment_rows = [{"method": payment_method, "amount": total_amount}]
 
             try:
                 if not self.ensure_cart_in_stock():
@@ -1263,7 +1413,8 @@ class PosMainWindow(QMainWindow):
                     shift_id=self.shift_id,
                     tendered_amount=tendered_amount,
                     change_amount=change_amount,
-                    payments=[{"method": payment_method, "amount": total_amount}],
+                    note=note_text,
+                    payments=payment_rows,
                 )
                 if payment_method == "Cash":
                     add_cash_movement(
@@ -1289,15 +1440,19 @@ class PosMainWindow(QMainWindow):
                 return
 
             payment_result = {
+                "sale_id": sale_id,
                 "sale_items": sale_items,
                 "total_amount": total_amount,
                 "tendered_amount": tendered_amount,
                 "change_amount": change_amount,
                 "payment_method": payment_method,
+                "note": note_text,
+                "payments": payment_rows,
             }
             dialog.accept()
 
         amount_tendered_input.textChanged.connect(update_change)
+        bank_radio.toggled.connect(toggle_bank_transfer_ui)
         cancel_button.clicked.connect(dialog.reject)
         confirm_button.clicked.connect(confirm_payment)
         amount_tendered_input.setFocus()
@@ -1312,18 +1467,30 @@ class PosMainWindow(QMainWindow):
         if not self.ensure_cart_in_stock():
             return
 
+        payment_settings = self.get_payment_settings()
+        bank_transfer_enabled = bool(payment_settings["enable_bank_transfer"])
+
         dialog = QDialog(self)
         dialog.setWindowTitle("Split Payment")
         dialog.setModal(True)
-        dialog.setMinimumWidth(390)
+        dialog.setMinimumWidth(720)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(14)
 
-        total_label = QLabel(f"Total Amount: ${total_amount:,.2f}")
+        total_label = QLabel(f"Total Amount: {self.format_money(total_amount)}")
         total_label.setObjectName("dialogTotalLabel")
         layout.addWidget(total_label)
+
+        content_layout = QHBoxLayout()
+        content_layout.setSpacing(16)
+
+        left_panel = QFrame()
+        left_panel.setObjectName("paymentDialogPanel")
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(18, 18, 18, 18)
+        left_layout.setSpacing(12)
 
         form_layout = QFormLayout()
         form_layout.setHorizontalSpacing(12)
@@ -1333,13 +1500,29 @@ class PosMainWindow(QMainWindow):
         cash_input.setPlaceholderText("0.00")
         cash_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
 
-        card_input = QLineEdit()
-        card_input.setPlaceholderText("0.00")
-        card_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
+        transfer_input = QLineEdit()
+        transfer_input.setPlaceholderText("0.00")
+        transfer_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
+
+        note_input = QLineEdit()
+        note_input.setPlaceholderText("Note")
 
         form_layout.addRow("Cash", cash_input)
-        form_layout.addRow("Card/Transfer", card_input)
-        layout.addLayout(form_layout)
+        form_layout.addRow("Bank Transfer", transfer_input)
+        form_layout.addRow("Note", note_input)
+
+        left_layout.addLayout(form_layout)
+        left_layout.addStretch(1)
+
+        bank_qr_panel = self.create_bank_qr_panel(
+            payment_settings,
+            SPLIT_PAYMENT_QR_DISPLAY_SIZE,
+            "Bank Transfer QR",
+        )
+
+        content_layout.addWidget(left_panel, 1)
+        content_layout.addWidget(bank_qr_panel, 0)
+        layout.addLayout(content_layout)
 
         button_layout = QHBoxLayout()
         button_layout.addStretch()
@@ -1363,22 +1546,36 @@ class PosMainWindow(QMainWindow):
             nonlocal payment_result
             try:
                 cash_amount = self.parse_money(cash_input.text() or "0")
-                card_amount = self.parse_money(card_input.text() or "0")
+                transfer_amount = self.parse_money(transfer_input.text() or "0")
             except ValueError:
                 QMessageBox.warning(dialog, "Invalid Amount", "Please enter valid payment amounts.")
                 return
 
-            tendered_amount = cash_amount + card_amount
+            if transfer_amount > 0 and not bank_transfer_enabled:
+                QMessageBox.warning(
+                    dialog,
+                    "Bank Transfer Disabled",
+                    "Please enable Bank Transfer in Settings before using a bank transfer split amount.",
+                )
+                return
+
+            tendered_amount = cash_amount + transfer_amount
             if tendered_amount < total_amount:
                 QMessageBox.warning(
                     dialog,
                     "Insufficient Payment",
-                    "Cash plus Card/Transfer amount is less than the total amount.",
+                    "Cash plus Bank Transfer amount is less than the total amount.",
                 )
                 return
 
             change_amount = tendered_amount - total_amount
             sale_items = self.get_sale_items_from_cart_table()
+            note_text = note_input.text().strip()
+            payment_rows = []
+            if cash_amount > 0:
+                payment_rows.append({"method": "Cash", "amount": cash_amount})
+            if transfer_amount > 0:
+                payment_rows.append({"method": "Bank Transfer", "amount": transfer_amount})
 
             try:
                 if not self.ensure_cart_in_stock():
@@ -1392,10 +1589,8 @@ class PosMainWindow(QMainWindow):
                     shift_id=self.shift_id,
                     tendered_amount=tendered_amount,
                     change_amount=change_amount,
-                    payments=[
-                        {"method": "Cash", "amount": cash_amount},
-                        {"method": "Card/Transfer", "amount": card_amount},
-                    ],
+                    note=note_text,
+                    payments=payment_rows,
                 )
                 if cash_amount > 0:
                     add_cash_movement(
@@ -1414,11 +1609,14 @@ class PosMainWindow(QMainWindow):
                 return
 
             payment_result = {
+                "sale_id": sale_id,
                 "sale_items": sale_items,
                 "total_amount": total_amount,
                 "tendered_amount": tendered_amount,
                 "change_amount": change_amount,
                 "payment_method": "Split",
+                "note": note_text,
+                "payments": payment_rows,
             }
             dialog.accept()
 
@@ -1446,7 +1644,10 @@ class PosMainWindow(QMainWindow):
         self.statusBar().showMessage("Transaction voided", 2500)
 
     def parse_money(self, value: str) -> float:
-        clean_value = value.strip().replace("$", "").replace(",", "")
+        clean_value = value.strip().replace(",", "")
+        for symbol in {self.get_currency_symbol(), "$"}:
+            if symbol:
+                clean_value = clean_value.replace(symbol, "")
         if not clean_value:
             raise ValueError("Empty amount")
         amount = float(clean_value)
@@ -1489,51 +1690,201 @@ class PosMainWindow(QMainWindow):
         tendered_amount: float,
         change_amount: float,
         payment_method: str,
+        order_id: int | None = None,
+        cashier_name: str = "",
+        note: str = "",
+        payments: list[dict[str, object]] | None = None,
     ) -> str:
-        line_width = 42
-        lines = [
-            "MY POS SHOP".center(line_width),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S").center(line_width),
-            f"Payment: {payment_method}".center(line_width),
-            "-" * line_width,
-            f"{'Item':<18}{'Qty':>4}{'Price':>9}{'Amount':>11}",
-            "-" * line_width,
-        ]
+        settings = self.get_receipt_settings()
+        currency_symbol = settings["currency_symbol"]
+        line_width = 36
+        divider = "=" * line_width
+        thin_divider = "-" * line_width
+        normalized_payment_method = payment_method.strip().replace("_", " ").lower()
+        if normalized_payment_method == "cash":
+            payment_label = "Cash"
+        elif normalized_payment_method == "bank transfer":
+            payment_label = "Bank Transfer"
+        elif normalized_payment_method == "split":
+            payment_label = "Split Payment"
+        else:
+            payment_label = payment_method
 
-        for item in sale_items:
-            name = str(item["name"])[:18]
-            qty = float(item["qty"])
-            price = float(item["price"])
-            subtotal = float(item["subtotal"])
-            lines.append(f"{name:<18}{qty:>4g}{price:>9.2f}{subtotal:>11.2f}")
+        def center_text(value: str) -> str:
+            return value.strip().center(line_width)
+
+        def center_wrapped(value: str, uppercase: bool = False) -> list[str]:
+            rendered_lines: list[str] = []
+            normalized_text = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+            for raw_line in normalized_text.split("\n"):
+                clean_line = " ".join(raw_line.split())
+                if not clean_line:
+                    continue
+                if uppercase:
+                    clean_line = clean_line.upper()
+                chunks = wrap(clean_line, width=line_width, break_long_words=True) or [clean_line]
+                rendered_lines.extend(chunk.center(line_width) for chunk in chunks)
+            return rendered_lines
+
+        def amount_row(label: str, amount: float) -> str:
+            value = self.format_money(amount, currency_symbol)
+            clean_label = str(label)[:16]
+            return f"{clean_label:<16}{value:>{line_width - 16}}"
+
+        def info_row(label: str, value: str | int) -> str:
+            text = str(value)
+            return f"{label:<9}{text:>{line_width - 9}}"
+
+        def labeled_wrapped(label: str, value: str) -> list[str]:
+            clean_value = " ".join(str(value or "").split())
+            if not clean_value:
+                return []
+            prefix = f"{label}: "
+            available_width = max(line_width - len(prefix), 8)
+            chunks = wrap(clean_value, width=available_width, break_long_words=True)
+            rendered_lines: list[str] = []
+            for index, chunk in enumerate(chunks):
+                if index == 0:
+                    rendered_lines.append(f"{prefix}{chunk}")
+                else:
+                    rendered_lines.append(f"{' ' * len(prefix)}{chunk}")
+            return rendered_lines
+
+        def compact_name(value: str) -> str:
+            return " ".join(value.split())
+
+        lines: list[str] = []
+
+        if settings["store_name"]:
+            lines.extend(center_wrapped(settings["store_name"], uppercase=True))
+
+        if settings["store_address"]:
+            lines.extend(center_wrapped(settings["store_address"]))
+        if settings["store_phone"]:
+            lines.extend(center_wrapped(f"Tel: {settings['store_phone']}"))
+        if settings["receipt_header"]:
+            lines.extend(center_wrapped(settings["receipt_header"]))
+        if lines:
+            lines.append(divider)
 
         lines.extend(
             [
-                "-" * line_width,
-                f"{'Total':<22}${total_amount:>18,.2f}",
-                f"{'Tendered':<22}${tendered_amount:>18,.2f}",
-                f"{'Change':<22}${change_amount:>18,.2f}",
-                "-" * line_width,
-                "Thank you for shopping!".center(line_width),
+                center_text("SALES RECEIPT"),
+                thin_divider,
             ]
         )
+
+        if order_id is not None:
+            lines.append(info_row("Order", f"#{order_id}"))
+        if cashier_name:
+            lines.append(info_row("Cashier", cashier_name[: line_width - 9]))
+        lines.append(info_row("Date", datetime.now().strftime("%Y-%m-%d %H:%M")))
+        lines.append(info_row("Payment", payment_label))
+        if note:
+            lines.extend(labeled_wrapped("Note", note))
+        lines.append(thin_divider)
+
+        for item in sale_items:
+            name = compact_name(str(item["name"]))
+            qty = float(item["qty"])
+            price = float(item["price"])
+            subtotal = float(item["subtotal"])
+
+            while name:
+                lines.append(name[:line_width].rstrip())
+                name = name[line_width:].lstrip()
+
+            qty_price = f"{qty:g} x {self.format_money(price, currency_symbol)}"
+            subtotal_text = self.format_money(subtotal, currency_symbol)
+            lines.append(f"  {qty_price:<17}{subtotal_text:>{line_width - 19}}")
+
+        lines.extend(
+            [
+                thin_divider,
+                amount_row("TOTAL", total_amount),
+            ]
+        )
+
+        payment_rows = payments or []
+        visible_payment_rows = []
+        for payment in payment_rows:
+            try:
+                payment_amount = float(payment.get("amount") or 0)  # type: ignore[union-attr]
+            except (TypeError, ValueError, AttributeError):
+                continue
+            if payment_amount <= 0:
+                continue
+            try:
+                payment_method_label = str(payment.get("method") or "Payment")  # type: ignore[union-attr]
+            except AttributeError:
+                payment_method_label = "Payment"
+            visible_payment_rows.append((payment_method_label, payment_amount))
+
+        if visible_payment_rows and normalized_payment_method != "cash":
+            for payment_method_label, payment_amount in visible_payment_rows:
+                lines.append(amount_row(payment_method_label, payment_amount))
+
+        if normalized_payment_method in {"cash", "split"}:
+            lines.append(amount_row("Tendered", tendered_amount))
+            lines.append(amount_row("Change", change_amount))
+
+        lines.append(divider)
+
+        if settings["receipt_footer"]:
+            lines.extend(center_wrapped(settings["receipt_footer"]))
+
         return "\n".join(lines)
 
     def show_receipt_preview(self, receipt_text: str) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Receipt Preview")
         dialog.setModal(True)
-        dialog.resize(460, 620)
 
         layout = QVBoxLayout(dialog)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
-        receipt_view = QTextEdit()
-        receipt_view.setReadOnly(True)
-        receipt_view.setPlainText(receipt_text)
-        receipt_view.setFont(QFont("Consolas", 10))
-        layout.addWidget(receipt_view, 1)
+        preview_title = QLabel("Receipt Preview")
+        preview_title.setObjectName("receiptPreviewTitle")
+        preview_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(preview_title)
+
+        receipt_font = QFont("Courier New", 9)
+        receipt_font.setStyleHint(QFont.StyleHint.Monospace)
+        receipt_font.setFixedPitch(True)
+
+        receipt_lines = receipt_text.splitlines() or [""]
+        font_metrics = QFontMetrics(receipt_font)
+        text_width = max(font_metrics.horizontalAdvance(line) for line in receipt_lines)
+        text_height = font_metrics.lineSpacing() * len(receipt_lines) + (font_metrics.lineSpacing() * 2)
+
+        paper_padding_x = 18
+        paper_padding_y = 16
+        paper_width = max(286, text_width + paper_padding_x * 2)
+        paper_height = text_height + paper_padding_y * 2
+
+        receipt_paper = QFrame()
+        receipt_paper.setObjectName("receiptPreviewPaper")
+        receipt_paper.setFixedWidth(paper_width)
+        receipt_paper.setMinimumHeight(paper_height)
+
+        paper_layout = QVBoxLayout(receipt_paper)
+        paper_layout.setContentsMargins(paper_padding_x, paper_padding_y, paper_padding_x, paper_padding_y)
+        paper_layout.setSpacing(0)
+
+        receipt_label = QLabel(receipt_text)
+        receipt_label.setObjectName("receiptPreviewText")
+        receipt_label.setFont(receipt_font)
+        receipt_label.setTextFormat(Qt.TextFormat.PlainText)
+        receipt_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        receipt_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        receipt_label.setWordWrap(False)
+        receipt_label.setMinimumWidth(text_width)
+        receipt_label.setMinimumHeight(text_height)
+        receipt_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
+
+        paper_layout.addWidget(receipt_label, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(receipt_paper, 0, Qt.AlignmentFlag.AlignCenter)
 
         close_button = QPushButton("Close")
         close_button.setObjectName("primaryDialogButton")
@@ -1543,8 +1894,37 @@ class PosMainWindow(QMainWindow):
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         button_layout.addWidget(close_button)
+        button_layout.addStretch()
         layout.addLayout(button_layout)
 
+        dialog.setStyleSheet(
+            f"""
+            QDialog {{
+                background: #EEF2F6;
+            }}
+
+            #receiptPreviewTitle {{
+                background: transparent;
+                color: {TEXT_DARK};
+                font-size: 16px;
+                font-weight: 800;
+            }}
+
+            #receiptPreviewPaper {{
+                background: #FFFFFF;
+                border: 1px solid {BORDER};
+                border-radius: 3px;
+            }}
+
+            #receiptPreviewText {{
+                background: transparent;
+                color: #111827;
+            }}
+            """
+        )
+
+        dialog.adjustSize()
+        dialog.setFixedSize(dialog.sizeHint())
         dialog.exec()
 
     def clear_current_sale(self) -> None:
@@ -1994,6 +2374,27 @@ def build_stylesheet() -> str:
         font-weight: 800;
     }}
 
+    #paymentQrPanel {{
+        background: #F8FAFC;
+        border: 1px dashed {BORDER};
+        border-radius: 12px;
+    }}
+
+    #paymentQrPreview {{
+        background: #FFFFFF;
+        border: 1px solid {BORDER};
+        border-radius: 10px;
+        color: {TEXT_MUTED};
+        font-size: 12px;
+        font-weight: 700;
+    }}
+
+    #paymentQrDetails {{
+        color: {TEXT_DARK};
+        font-size: 12px;
+        font-weight: 700;
+    }}
+
     QRadioButton {{
         background: #FFFFFF;
         border: 1px solid {BORDER};
@@ -2031,5 +2432,5 @@ def build_stylesheet() -> str:
 
 def configure_app_font(app) -> None:
     app.setStyle("Fusion")
-    app.setStyleSheet(build_stylesheet())
+    app.setStyleSheet(build_stylesheet() + MODERN_WIDGET_STYLESHEET)
     app.setFont(QFont("Segoe UI", 10))

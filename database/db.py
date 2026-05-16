@@ -134,6 +134,7 @@ def init_db() -> None:
         add_column_if_missing(connection, "sales", "shift_id", "shift_id INTEGER")
         add_column_if_missing(connection, "sales", "tendered_amount", "tendered_amount REAL DEFAULT 0")
         add_column_if_missing(connection, "sales", "change_amount", "change_amount REAL DEFAULT 0")
+        add_column_if_missing(connection, "sales", "note", "note TEXT")
         add_column_if_missing(connection, "sales", "status", "status TEXT DEFAULT 'completed'")
         add_column_if_missing(connection, "sale_items", "product_id", "product_id INTEGER")
         add_column_if_missing(connection, "sale_items", "name", "name TEXT")
@@ -610,6 +611,7 @@ def create_sale(
     shift_id: int | None = None,
     tendered_amount: float = 0,
     change_amount: float = 0,
+    note: str = "",
     payments: list[dict[str, Any]] | None = None,
 ) -> int:
     init_db()
@@ -619,9 +621,9 @@ def create_sale(
             """
             INSERT INTO sales (
                 user_id, register_id, shift_id, total_amount, payment_method,
-                tendered_amount, change_amount, status
+                tendered_amount, change_amount, note, status
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'completed')
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'completed')
             """,
             (
                 user_id,
@@ -631,6 +633,7 @@ def create_sale(
                 payment_method,
                 tendered_amount,
                 change_amount,
+                note.strip(),
             ),
         )
         sale_id = int(cursor.lastrowid)
