@@ -752,8 +752,8 @@ class LoginWindow(QDialog):
         self.password_toggle_button = QPushButton()
         self.password_toggle_button.setObjectName("passwordToggleButton")
         self.password_toggle_button.setCheckable(True)
-        self.password_toggle_button.setFixedSize(34, 34)
-        IconManager.apply_button(self.password_toggle_button, "eye")
+        self.password_toggle_button.setFixedSize(24, 24)
+        IconManager.apply_button(self.password_toggle_button, "eye", size=16)
         self.password_toggle_button.setToolTip("Show password")
         self.password_toggle_button.clicked.connect(self.toggle_password_visibility)
         password_layout.addWidget(password_icon)
@@ -993,6 +993,11 @@ class LoginWindow(QDialog):
                 background: transparent;
                 border: none;
                 border-radius: 6px;
+                min-width: 24px;
+                max-width: 24px;
+                min-height: 24px;
+                max-height: 24px;
+                padding: 0;
             }
 
             #passwordToggleButton:hover {
