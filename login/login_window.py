@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListView,
     QMessageBox,
     QPushButton,
     QVBoxLayout,
@@ -639,6 +640,22 @@ class ToggleSwitch(QPushButton):
             painter.drawLine(36, 10, 30, 16)
 
 
+class RoleComboBox(QComboBox):
+    """Combo box with a light popup container that matches the login form."""
+
+    def showPopup(self) -> None:
+        super().showPopup()
+        popup_container = self.view().parentWidget()
+        if popup_container is not None:
+            popup_container.setStyleSheet(
+                """
+                background: #FFFFFF;
+                border: 1px solid #DCE5F0;
+                border-radius: 8px;
+                """
+            )
+
+
 class LoginWindow(QDialog):
     def __init__(self) -> None:
         super().__init__()
@@ -738,7 +755,7 @@ class LoginWindow(QDialog):
         password_row.setObjectName("inputRow")
         password_row.setFixedHeight(48)
         password_layout = QHBoxLayout(password_row)
-        password_layout.setContentsMargins(14, 0, 14, 0)
+        password_layout.setContentsMargins(14, 0, 12, 0)
         password_layout.setSpacing(10)
         password_icon = self.create_inline_icon_label("lock")
         password_separator = QFrame()
@@ -752,14 +769,18 @@ class LoginWindow(QDialog):
         self.password_toggle_button = QPushButton()
         self.password_toggle_button.setObjectName("passwordToggleButton")
         self.password_toggle_button.setCheckable(True)
-        self.password_toggle_button.setFixedSize(24, 24)
-        IconManager.apply_button(self.password_toggle_button, "eye", size=16)
+        self.password_toggle_button.setFixedSize(20, 24)
+        IconManager.apply_button(self.password_toggle_button, "eye_off", size=18)
         self.password_toggle_button.setToolTip("Show password")
         self.password_toggle_button.clicked.connect(self.toggle_password_visibility)
         password_layout.addWidget(password_icon)
         password_layout.addWidget(password_separator)
         password_layout.addWidget(self.password_input, 1)
-        password_layout.addWidget(self.password_toggle_button)
+        password_layout.addWidget(
+            self.password_toggle_button,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
 
         card_layout.addWidget(username_row)
         card_layout.addWidget(password_row)
@@ -773,10 +794,18 @@ class LoginWindow(QDialog):
         role_separator = QFrame()
         role_separator.setObjectName("iconSeparator")
         role_separator.setFixedWidth(1)
-        self.role_combo = QComboBox()
+        self.role_combo = RoleComboBox()
         self.role_combo.setObjectName("roleCombo")
         self.role_combo.setMinimumHeight(34)
+        role_popup = QListView()
+        role_popup.setObjectName("rolePopupView")
+        role_popup.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        role_popup.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        role_popup.setSpacing(0)
+        role_popup.setUniformItemSizes(True)
+        self.role_combo.setView(role_popup)
         self.load_roles()
+        self.configure_role_popup()
         role_layout.addWidget(role_icon)
         role_layout.addWidget(role_separator)
         role_layout.addWidget(self.role_combo, 1)
@@ -821,6 +850,12 @@ class LoginWindow(QDialog):
         self.role_combo.clear()
         for role in get_all_roles():
             self.role_combo.addItem(role["name"], role["id"])
+
+    def configure_role_popup(self) -> None:
+        visible_roles = min(max(self.role_combo.count(), 3), 6)
+        self.role_combo.setMaxVisibleItems(visible_roles)
+        popup_row_height = max(self.role_combo.view().sizeHintForRow(0), 34)
+        self.role_combo.view().setMinimumHeight((popup_row_height * visible_roles) + 14)
 
     def create_inline_icon_label(self, icon_key: str) -> QLabel:
         label = QLabel()
@@ -870,12 +905,12 @@ class LoginWindow(QDialog):
     def toggle_password_visibility(self) -> None:
         if self.password_toggle_button.isChecked():
             self.password_input.setEchoMode(QLineEdit.EchoMode.Normal)
-            self.password_toggle_button.setIcon(IconManager.icon("eye_off"))
+            self.password_toggle_button.setIcon(IconManager.icon("eye"))
             self.password_toggle_button.setToolTip("Hide password")
             return
 
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        self.password_toggle_button.setIcon(IconManager.icon("eye"))
+        self.password_toggle_button.setIcon(IconManager.icon("eye_off"))
         self.password_toggle_button.setToolTip("Show password")
 
     def get_user(self) -> dict[str, Any] | None:
@@ -978,23 +1013,33 @@ class LoginWindow(QDialog):
                 color: #111827;
                 font-size: 14px;
                 outline: none;
-                padding: 6px;
-                selection-background-color: #EAF3FF;
-                selection-color: #1F77FF;
+                padding: 4px;
+                selection-background-color: transparent;
+                selection-color: #111827;
             }
 
             #roleCombo QAbstractItemView::item {
-                min-height: 32px;
-                padding: 7px 12px;
+                min-height: 34px;
+                padding: 0 12px;
                 border-radius: 6px;
+            }
+
+            #roleCombo QAbstractItemView::item:hover {
+                background: #F5F8FC;
+                color: #111827;
+            }
+
+            #roleCombo QAbstractItemView::item:selected {
+                background: #EAF3FF;
+                color: #1F77FF;
             }
 
             #passwordToggleButton {
                 background: transparent;
                 border: none;
                 border-radius: 6px;
-                min-width: 24px;
-                max-width: 24px;
+                min-width: 20px;
+                max-width: 20px;
                 min-height: 24px;
                 max-height: 24px;
                 padding: 0;
