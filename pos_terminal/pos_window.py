@@ -3,7 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from textwrap import wrap
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -168,6 +168,7 @@ class PosMainWindow(QMainWindow):
 
         self.build_ui()
         self.connect_global_refresh()
+        self.start_shared_data_refresh()
         self.populate_cart()
         self.create_shortcuts()
 
@@ -252,6 +253,12 @@ class PosMainWindow(QMainWindow):
 
     def notify_app_data_changed(self) -> None:
         self.app_data_changed.emit()
+
+    def start_shared_data_refresh(self) -> None:
+        self.shared_data_refresh_timer = QTimer(self)
+        self.shared_data_refresh_timer.setInterval(5000)
+        self.shared_data_refresh_timer.timeout.connect(self.notify_app_data_changed)
+        self.shared_data_refresh_timer.start()
 
     def reload_data(self) -> None:
         if hasattr(self, "search_input"):
@@ -742,8 +749,11 @@ class PosMainWindow(QMainWindow):
         image_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image_placeholder.setMinimumHeight(76)
         image_path = str(product.get("image_path") or "")
-        if image_path and Path(image_path).exists():
-            pixmap = QPixmap(image_path)
+        resolved_image_path = Path(image_path)
+        if image_path and not resolved_image_path.is_absolute():
+            resolved_image_path = PROJECT_ROOT / resolved_image_path
+        if image_path and resolved_image_path.exists():
+            pixmap = QPixmap(str(resolved_image_path))
             if not pixmap.isNull():
                 image_placeholder.setPixmap(
                     pixmap.scaled(

@@ -384,6 +384,14 @@ def close_cash_shift(shift_id: int, user_id: int, closing_balance: float) -> Non
 def add_user(username: str, password: str, full_name: str, role_id: int) -> int:
     init_auth_db()
     with get_connection() as connection:
+        existing_user = connection.execute(
+            "SELECT id FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+
+        if existing_user is not None:
+            raise ValueError("That username is already in use.")
+
         cursor = connection.execute(
             "INSERT INTO users (username, password_hash, full_name, role_id) VALUES (?, ?, ?, ?)",
             (username, hash_password(password), full_name, role_id),
@@ -395,6 +403,20 @@ def add_user(username: str, password: str, full_name: str, role_id: int) -> int:
 def update_user(user_id: int, username: str, full_name: str, role_id: int, new_password: str | None = None) -> None:
     init_auth_db()
     with get_connection() as connection:
+        user = connection.execute(
+            "SELECT id FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if user is None:
+            raise ValueError("User not found.")
+
+        duplicate = connection.execute(
+            "SELECT id FROM users WHERE username = ? AND id <> ?",
+            (username, user_id),
+        ).fetchone()
+        if duplicate is not None:
+            raise ValueError("That username is already in use.")
+
         if new_password:
             connection.execute(
                 "UPDATE users SET username = ?, password_hash = ?, full_name = ?, role_id = ? WHERE id = ?",
@@ -408,10 +430,35 @@ def update_user(user_id: int, username: str, full_name: str, role_id: int, new_p
         connection.commit()
 
 
-def delete_user(user_id: int) -> None:
+def delete_user(user_id: int, current_user_id: int | None = None) -> None:
     init_auth_db()
     with get_connection() as connection:
-        connection.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
+        user = connection.execute(
+            """
+            SELECT u.id, u.active, r.name AS role_name
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if user is None:
+            raise ValueError("User not found.")
+        if current_user_id is not None and user_id == current_user_id:
+            raise ValueError("You cannot delete the account you are currently using.")
+        if user["role_name"] == "Admin" and user["active"]:
+            active_admin_count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM users u
+                JOIN roles r ON u.role_id = r.id
+                WHERE r.name = 'Admin' AND u.active = 1
+                """
+            ).fetchone()[0]
+            if active_admin_count <= 1:
+                raise ValueError("You cannot delete the last active admin account.")
+
+        connection.execute("DELETE FROM users WHERE id = ?", (user_id,))
         connection.commit()
 
 

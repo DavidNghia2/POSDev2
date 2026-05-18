@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
+from html import escape
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QTextDocument
+from PyQt6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -9,6 +12,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
+    QMenu,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -135,6 +139,7 @@ class ReportsWindow(QWidget):
     def __init__(self, current_user: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_user = current_user
+        self._setting_preset_range = False
         self.create_ui()
         self.load_report()
 
@@ -189,7 +194,7 @@ class ReportsWindow(QWidget):
         self.date_from.setDateTime(
             datetime.now().replace(hour=0, minute=0, second=0)
         )
-        self.date_from.dateChanged.connect(self.load_report)
+        self.date_from.dateChanged.connect(self.on_manual_date_changed)
         filters_layout.addWidget(self.date_from)
         
         # Date to
@@ -197,29 +202,31 @@ class ReportsWindow(QWidget):
         self.date_to = QDateEdit()
         self.date_to.setCalendarPopup(True)
         self.date_to.setDateTime(datetime.now())
-        self.date_to.dateChanged.connect(self.load_report)
+        self.date_to.dateChanged.connect(self.on_manual_date_changed)
         filters_layout.addWidget(self.date_to)
         
         # Quick filters
         filters_layout.addStretch()
-        
-        self.today_button = QPushButton("Today")
-        IconManager.apply_button(self.today_button, "today")
-        self.today_button.setObjectName("filterButton")
-        self.today_button.clicked.connect(lambda: self.set_date_range("today"))
-        filters_layout.addWidget(self.today_button)
-        
-        self.week_button = QPushButton("This Week")
-        IconManager.apply_button(self.week_button, "week")
-        self.week_button.setObjectName("filterButton")
-        self.week_button.clicked.connect(lambda: self.set_date_range("week"))
-        filters_layout.addWidget(self.week_button)
-        
-        self.month_button = QPushButton("This Month")
-        IconManager.apply_button(self.month_button, "month")
-        self.month_button.setObjectName("filterButton")
-        self.month_button.clicked.connect(lambda: self.set_date_range("month"))
-        filters_layout.addWidget(self.month_button)
+
+        self.date_range_button = QPushButton("Today")
+        IconManager.apply_button(self.date_range_button, "today")
+        self.date_range_button.setObjectName("filterButton")
+
+        self.date_range_menu = QMenu(self)
+        today_action = self.date_range_menu.addAction("Today")
+        week_action = self.date_range_menu.addAction("This Week")
+        month_action = self.date_range_menu.addAction("This Month")
+        today_action.triggered.connect(lambda: self.set_date_range("today"))
+        week_action.triggered.connect(lambda: self.set_date_range("week"))
+        month_action.triggered.connect(lambda: self.set_date_range("month"))
+        self.date_range_button.setMenu(self.date_range_menu)
+        filters_layout.addWidget(self.date_range_button)
+
+        self.print_button = QPushButton("Print Report")
+        IconManager.apply_button(self.print_button, "reports")
+        self.print_button.setObjectName("primaryButton")
+        self.print_button.clicked.connect(self.print_report)
+        filters_layout.addWidget(self.print_button)
         
         layout.addLayout(filters_layout)
         
@@ -260,8 +267,23 @@ class ReportsWindow(QWidget):
         else:
             return
         
+        labels = {
+            "today": "Today",
+            "week": "This Week",
+            "month": "This Month",
+        }
+        self._setting_preset_range = True
+        self.date_range_button.setText(labels[period])
         self.date_from.setDateTime(start)
         self.date_to.setDateTime(end)
+        self._setting_preset_range = False
+        self.load_report()
+
+    def on_manual_date_changed(self) -> None:
+        if self._setting_preset_range:
+            return
+        self.date_range_button.setText("Custom Range")
+        self.load_report()
 
     def load_report(self) -> None:
         report_type = self.report_type_combo.currentText()
@@ -280,6 +302,96 @@ class ReportsWindow(QWidget):
             self.load_sales_by_payment(start_date, end_date)
         elif report_type == "Sales by Product":
             self.load_sales_by_product(start_date, end_date)
+
+    def print_report(self) -> None:
+        # Refresh first so the printed copy always mirrors the latest selected report.
+        self.load_report()
+
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setDocName(f"{self.report_type_combo.currentText()} Report")
+        preview = QPrintPreviewDialog(printer, self)
+        preview.setWindowTitle("Print Preview - Report")
+        preview.resize(1100, 800)
+        preview.paintRequested.connect(self.render_report_to_printer)
+        preview.exec()
+
+    def render_report_to_printer(self, printer: QPrinter) -> None:
+        document = QTextDocument(self)
+        document.setHtml(self.build_report_html())
+        document.print(printer)
+
+    def build_report_html(self) -> str:
+        report_type = self.report_type_combo.currentText()
+        start_date = self.date_from.date().toString("yyyy-MM-dd")
+        end_date = self.date_to.date().toString("yyyy-MM-dd")
+        generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        headers = []
+        for column in range(self.report_table.columnCount()):
+            header_item = self.report_table.horizontalHeaderItem(column)
+            headers.append(header_item.text() if header_item else "")
+
+        rows = []
+        for row in range(self.report_table.rowCount()):
+            values = []
+            for column in range(self.report_table.columnCount()):
+                item = self.report_table.item(row, column)
+                values.append(item.text() if item else "")
+            rows.append(values)
+
+        header_html = "".join(f"<th>{escape(value)}</th>" for value in headers)
+        rows_html = "".join(
+            "<tr>" + "".join(f"<td>{escape(value)}</td>" for value in values) + "</tr>"
+            for values in rows
+        )
+        empty_state = (
+            f"<tr><td colspan='{max(len(headers), 1)}'>No data for the selected period.</td></tr>"
+            if not rows
+            else ""
+        )
+
+        return f"""
+        <html>
+            <head>
+                <style>
+                    body {{
+                        font-family: "Segoe UI", Arial, sans-serif;
+                        color: #1F2933;
+                    }}
+                    h1 {{
+                        margin-bottom: 4px;
+                    }}
+                    .meta {{
+                        color: #4B5563;
+                        margin-bottom: 18px;
+                    }}
+                    table {{
+                        width: 100%;
+                        border-collapse: collapse;
+                    }}
+                    th, td {{
+                        border: 1px solid #D1D5DB;
+                        padding: 8px;
+                        text-align: center;
+                    }}
+                    th {{
+                        background: #E5E7EB;
+                    }}
+                </style>
+            </head>
+            <body>
+                <h1>{escape(report_type)}</h1>
+                <div class="meta">
+                    Period: {escape(start_date)} to {escape(end_date)}<br>
+                    Generated: {escape(generated_at)}
+                </div>
+                <table>
+                    <thead><tr>{header_html}</tr></thead>
+                    <tbody>{rows_html or empty_state}</tbody>
+                </table>
+            </body>
+        </html>
+        """
 
     def load_daily_sales(self, start_date: str, end_date: str) -> None:
         data = get_sales_report(start_date, end_date)
@@ -471,6 +583,35 @@ class ReportsWindow(QWidget):
 
             #filterButton:hover {
                 background: #E5E7EB;
+            }
+
+            QMenu {
+                background: #FFFFFF;
+                border: 1px solid #D8E0E8;
+                border-radius: 8px;
+                padding: 6px;
+            }
+
+            QMenu::item {
+                border-radius: 6px;
+                padding: 8px 18px;
+            }
+
+            QMenu::item:selected {
+                background: #E5E7EB;
+            }
+
+            #primaryButton {
+                background: #2563EB;
+                border: none;
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-weight: 700;
+                padding: 9px 14px;
+            }
+
+            #primaryButton:hover {
+                background: #1D4ED8;
             }
 
             QTableWidget {

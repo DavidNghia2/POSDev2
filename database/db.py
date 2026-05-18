@@ -180,7 +180,236 @@ def init_db() -> None:
             connection.execute(
                 "INSERT INTO app_meta (key, value) VALUES ('inventory_model_v2_migrated', 'true')"
             )
+        seed_supermarket_catalog(connection)
+        seed_supermarket_catalog_v2(connection)
+        seed_supermarket_catalog_v3(connection)
         connection.commit()
+
+
+def seed_supermarket_catalog(connection: sqlite3.Connection) -> None:
+    seeded = connection.execute(
+        "SELECT value FROM app_meta WHERE key = 'supermarket_catalog_seed_v1'"
+    ).fetchone()
+    if seeded is not None:
+        return
+
+    catalog = [
+        ("8901000000011", "Whole Milk 1L", 2.49, "Dairy", 48, False, "assets/products/milk.png"),
+        ("8901000000028", "Fresh Bread Loaf", 1.99, "Bakery", 36, False, "assets/products/bread.png"),
+        ("8901000000035", "Large Eggs 12 Pack", 3.79, "Dairy", 30, False, "assets/products/eggs.png"),
+        ("8901000000042", "Bananas", 1.29, "Produce", 55, True, "assets/products/bananas.png"),
+        ("8901000000059", "Red Apples", 1.89, "Produce", 60, True, "assets/products/apples.png"),
+        ("8901000000066", "White Rice 1kg", 4.49, "Grains", 28, False, "assets/products/rice.png"),
+        ("8901000000073", "Spaghetti Pasta 500g", 2.19, "Pantry", 42, False, "assets/products/pasta.png"),
+        ("8901000000080", "Olive Oil 500ml", 7.99, "Pantry", 24, False, "assets/products/olive_oil.png"),
+        ("8901000000097", "Chicken Breast 1kg", 8.99, "Meat", 20, True, "assets/products/chicken.png"),
+        ("8901000000103", "Greek Yogurt 500g", 3.29, "Dairy", 34, False, "assets/products/yogurt.png"),
+        ("8901000000110", "Orange Juice 1L", 3.49, "Beverages", 26, False, "assets/products/orange_juice.png"),
+        ("8901000000127", "Corn Cereal 500g", 4.19, "Breakfast", 22, False, "assets/products/cereal.png"),
+    ]
+
+    for barcode, name, price, category, stock_qty, requires_weight, image_path in catalog:
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM products
+            WHERE barcode = ?
+               OR EXISTS (
+                    SELECT 1
+                    FROM product_barcodes
+                    WHERE product_barcodes.product_id = products.id
+                      AND product_barcodes.barcode = ?
+               )
+            LIMIT 1
+            """,
+            (barcode, barcode),
+        ).fetchone()
+        if existing is not None:
+            continue
+
+        cursor = connection.execute(
+            """
+            INSERT INTO products (
+                barcode, name, price, category, stock_qty, requires_weight, image_path
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (barcode, name, price, category, stock_qty, int(requires_weight), image_path),
+        )
+        product_id = int(cursor.lastrowid)
+        connection.execute(
+            """
+            INSERT INTO product_barcodes (product_id, barcode, is_primary)
+            VALUES (?, ?, 1)
+            """,
+            (product_id, barcode),
+        )
+
+    connection.execute(
+        "INSERT INTO app_meta (key, value) VALUES ('supermarket_catalog_seed_v1', 'true')"
+    )
+
+
+def seed_supermarket_catalog_v2(connection: sqlite3.Connection) -> None:
+    seeded = connection.execute(
+        "SELECT value FROM app_meta WHERE key = 'supermarket_catalog_seed_v2'"
+    ).fetchone()
+    if seeded is not None:
+        return
+
+    catalog = [
+        ("8901000000134", "Fresh Tomatoes", 1.59, "Produce", 45, True, "assets/products/tomatoes.png"),
+        ("8901000000141", "Potatoes", 1.19, "Produce", 70, True, "assets/products/potatoes.png"),
+        ("8901000000158", "Yellow Onions", 1.39, "Produce", 52, True, "assets/products/onions.png"),
+        ("8901000000165", "Carrots 1kg", 1.79, "Produce", 40, False, "assets/products/carrots.png"),
+        ("8901000000172", "Lettuce Head", 1.49, "Produce", 26, False, "assets/products/lettuce.png"),
+        ("8901000000189", "Cheddar Cheese 250g", 3.99, "Dairy", 32, False, "assets/products/cheese.png"),
+        ("8901000000196", "Butter 250g", 2.89, "Dairy", 30, False, "assets/products/butter.png"),
+        ("8901000000202", "Mineral Water 1.5L", 0.99, "Beverages", 80, False, "assets/products/water.png"),
+        ("8901000000219", "Sparkling Water 1L", 1.29, "Beverages", 48, False, "assets/products/sparkling_water.png"),
+        ("8901000000226", "Ground Coffee 250g", 5.99, "Beverages", 24, False, "assets/products/coffee.png"),
+        ("8901000000233", "Black Tea 100 Bags", 4.49, "Beverages", 20, False, "assets/products/tea.png"),
+        ("8901000000240", "White Sugar 1kg", 2.19, "Pantry", 44, False, "assets/products/sugar.png"),
+        ("8901000000257", "Wheat Flour 1kg", 1.89, "Pantry", 46, False, "assets/products/flour.png"),
+        ("8901000000264", "Table Salt 750g", 0.89, "Pantry", 35, False, "assets/products/salt.png"),
+        ("8901000000271", "Tomato Ketchup 500g", 2.79, "Condiments", 28, False, "assets/products/ketchup.png"),
+        ("8901000000288", "Mayonnaise 500g", 3.19, "Condiments", 25, False, "assets/products/mayonnaise.png"),
+        ("8901000000295", "Canned Tuna 160g", 2.49, "Canned Goods", 38, False, "assets/products/tuna.png"),
+        ("8901000000301", "Salmon Fillet", 9.49, "Seafood", 18, True, "assets/products/salmon.png"),
+        ("8901000000318", "Beef Steak", 10.99, "Meat", 16, True, "assets/products/beef.png"),
+        ("8901000000325", "Hand Soap 500ml", 2.69, "Household", 27, False, "assets/products/soap.png"),
+        ("8901000000332", "Shampoo 400ml", 4.99, "Personal Care", 21, False, "assets/products/shampoo.png"),
+        ("8901000000349", "Toothpaste 120ml", 2.39, "Personal Care", 33, False, "assets/products/toothpaste.png"),
+        ("8901000000356", "Chocolate Cookies 300g", 2.99, "Snacks", 31, False, "assets/products/cookies.png"),
+        ("8901000000363", "Potato Chips 150g", 2.49, "Snacks", 36, False, "assets/products/chips.png"),
+    ]
+
+    for barcode, name, price, category, stock_qty, requires_weight, image_path in catalog:
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM products
+            WHERE barcode = ?
+               OR EXISTS (
+                    SELECT 1
+                    FROM product_barcodes
+                    WHERE product_barcodes.product_id = products.id
+                      AND product_barcodes.barcode = ?
+               )
+            LIMIT 1
+            """,
+            (barcode, barcode),
+        ).fetchone()
+        if existing is not None:
+            continue
+        cursor = connection.execute(
+            """
+            INSERT INTO products (
+                barcode, name, price, category, stock_qty, requires_weight, image_path
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (barcode, name, price, category, stock_qty, int(requires_weight), image_path),
+        )
+        product_id = int(cursor.lastrowid)
+        connection.execute(
+            """
+            INSERT INTO product_barcodes (product_id, barcode, is_primary)
+            VALUES (?, ?, 1)
+            """,
+            (product_id, barcode),
+        )
+
+    connection.execute(
+        "INSERT INTO app_meta (key, value) VALUES ('supermarket_catalog_seed_v2', 'true')"
+    )
+
+
+def seed_supermarket_catalog_v3(connection: sqlite3.Connection) -> None:
+    seeded = connection.execute(
+        "SELECT value FROM app_meta WHERE key = 'supermarket_catalog_seed_v3'"
+    ).fetchone()
+    if seeded is not None:
+        return
+
+    catalog = [
+        ("8901000000370", "Pears", 2.09, "Produce", 42, True, "assets/products/pears.png"),
+        ("8901000000387", "Seedless Grapes", 2.99, "Produce", 28, True, "assets/products/grapes.png"),
+        ("8901000000394", "Oranges", 2.29, "Produce", 40, True, "assets/products/oranges.png"),
+        ("8901000000400", "Strawberries 250g", 3.49, "Produce", 24, False, "assets/products/strawberries.png"),
+        ("8901000000417", "Cucumbers", 1.39, "Produce", 34, False, "assets/products/cucumbers.png"),
+        ("8901000000424", "Broccoli", 1.89, "Produce", 26, False, "assets/products/broccoli.png"),
+        ("8901000000431", "Sweet Corn", 1.59, "Produce", 30, False, "assets/products/corn.png"),
+        ("8901000000448", "Mushrooms 250g", 2.19, "Produce", 22, False, "assets/products/mushrooms.png"),
+        ("8901000000455", "Vanilla Ice Cream", 4.29, "Frozen", 20, False, "assets/products/ice_cream.png"),
+        ("8901000000462", "Cooking Cream 250ml", 2.49, "Dairy", 25, False, "assets/products/cream.png"),
+        ("8901000000479", "Cola Can 330ml", 1.19, "Beverages", 72, False, "assets/products/cola.png"),
+        ("8901000000486", "Lemon Soda 330ml", 1.19, "Beverages", 64, False, "assets/products/lemon_soda.png"),
+        ("8901000000493", "Energy Drink 250ml", 2.29, "Beverages", 40, False, "assets/products/energy_drink.png"),
+        ("8901000000509", "Apple Juice 1L", 3.39, "Beverages", 26, False, "assets/products/apple_juice.png"),
+        ("8901000000516", "Milk Chocolate 100g", 1.79, "Snacks", 48, False, "assets/products/chocolate.png"),
+        ("8901000000523", "Salted Crackers 250g", 2.19, "Snacks", 34, False, "assets/products/crackers.png"),
+        ("8901000000530", "Rolled Oats 500g", 2.69, "Breakfast", 29, False, "assets/products/oats.png"),
+        ("8901000000547", "Strawberry Jam 350g", 3.19, "Pantry", 24, False, "assets/products/jam.png"),
+        ("8901000000554", "Peanut Butter 340g", 3.79, "Pantry", 22, False, "assets/products/peanut_butter.png"),
+        ("8901000000561", "Baked Beans 400g", 1.59, "Canned Goods", 36, False, "assets/products/beans.png"),
+        ("8901000000578", "Red Lentils 1kg", 3.29, "Pantry", 27, False, "assets/products/lentils.png"),
+        ("8901000000585", "Instant Noodles 5 Pack", 2.99, "Pantry", 32, False, "assets/products/instant_noodles.png"),
+        ("8901000000592", "Frozen Pizza", 5.49, "Frozen", 18, False, "assets/products/frozen_pizza.png"),
+        ("8901000000608", "Frozen Peas 500g", 2.49, "Frozen", 20, False, "assets/products/frozen_peas.png"),
+        ("8901000000615", "Dish Soap 750ml", 2.89, "Household", 24, False, "assets/products/dish_soap.png"),
+        ("8901000000622", "Laundry Detergent 2L", 7.49, "Household", 18, False, "assets/products/laundry_detergent.png"),
+        ("8901000000639", "Paper Towels 4 Pack", 4.99, "Household", 20, False, "assets/products/paper_towels.png"),
+        ("8901000000646", "Toilet Paper 8 Roll", 6.49, "Household", 22, False, "assets/products/toilet_paper.png"),
+        ("8901000000653", "Deodorant Spray", 3.79, "Personal Care", 26, False, "assets/products/deodorant.png"),
+        ("8901000000660", "Body Lotion 400ml", 4.59, "Personal Care", 20, False, "assets/products/lotion.png"),
+        ("8901000000677", "Baby Wipes 80 Pack", 3.29, "Baby", 24, False, "assets/products/baby_wipes.png"),
+        ("8901000000684", "Diapers Medium 30 Pack", 8.99, "Baby", 16, False, "assets/products/diapers.png"),
+        ("8901000000691", "Cat Food 400g", 2.69, "Pet Care", 30, False, "assets/products/cat_food.png"),
+        ("8901000000707", "Dog Food 2kg", 6.99, "Pet Care", 18, False, "assets/products/dog_food.png"),
+        ("8901000000714", "Trash Bags 20 Pack", 4.29, "Household", 22, False, "assets/products/trash_bags.png"),
+        ("8901000000721", "Aluminum Foil 20m", 3.19, "Household", 24, False, "assets/products/aluminum_foil.png"),
+    ]
+
+    for barcode, name, price, category, stock_qty, requires_weight, image_path in catalog:
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM products
+            WHERE barcode = ?
+               OR EXISTS (
+                    SELECT 1
+                    FROM product_barcodes
+                    WHERE product_barcodes.product_id = products.id
+                      AND product_barcodes.barcode = ?
+               )
+            LIMIT 1
+            """,
+            (barcode, barcode),
+        ).fetchone()
+        if existing is not None:
+            continue
+        cursor = connection.execute(
+            """
+            INSERT INTO products (
+                barcode, name, price, category, stock_qty, requires_weight, image_path
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (barcode, name, price, category, stock_qty, int(requires_weight), image_path),
+        )
+        product_id = int(cursor.lastrowid)
+        connection.execute(
+            """
+            INSERT INTO product_barcodes (product_id, barcode, is_primary)
+            VALUES (?, ?, 1)
+            """,
+            (product_id, barcode),
+        )
+
+    connection.execute(
+        "INSERT INTO app_meta (key, value) VALUES ('supermarket_catalog_seed_v3', 'true')"
+    )
 
 
 def normalize_barcode(barcode: str) -> str | None:

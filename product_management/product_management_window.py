@@ -29,6 +29,7 @@ from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.theme import MODERN_WIDGET_STYLESHEET
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 PRODUCT_MANAGEMENT_STYLESHEET = """
 QWidget {
@@ -238,8 +239,11 @@ def set_label_pixmap(
     width: int,
     height: int,
 ) -> None:
-    if image_path and Path(image_path).exists():
-        pixmap = QPixmap(image_path)
+    resolved_path = Path(image_path)
+    if image_path and not resolved_path.is_absolute():
+        resolved_path = PROJECT_ROOT / resolved_path
+    if image_path and resolved_path.exists():
+        pixmap = QPixmap(str(resolved_path))
         if not pixmap.isNull():
             label.setPixmap(
                 pixmap.scaled(

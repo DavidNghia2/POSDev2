@@ -331,12 +331,12 @@ class UserManagementWindow(QWidget):
         
         if not confirm_delete(
             self,
-            "Are you sure you want to delete this user?",
+            "Are you sure you want to permanently delete this user?",
         ):
             return
         
         try:
-            delete_user(self.selected_user_id)
+            delete_user(self.selected_user_id, self.current_user["id"])
             log_audit(self.current_user["id"], "DELETE_USER", "users", self.selected_user_id)
         except Exception as e:
             QMessageBox.warning(self, "Error", str(e))
@@ -345,7 +345,7 @@ class UserManagementWindow(QWidget):
         self.clear_form()
         self.load_users()
         self.data_changed.emit()
-        QMessageBox.information(self, "Success", "User deleted successfully")
+        QMessageBox.information(self, "Success", "User permanently deleted successfully")
 
     def clear_form(self) -> None:
         self.selected_user_id = None
