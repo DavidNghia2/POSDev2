@@ -442,6 +442,30 @@ def fetch_product_barcodes(connection: sqlite3.Connection, product_id: int) -> l
     return [str(row["barcode"]) for row in rows]
 
 
+def fetch_barcodes_for_products(
+    connection: sqlite3.Connection,
+    product_ids: list[int],
+) -> dict[int, list[str]]:
+    if not product_ids:
+        return {}
+
+    placeholders = ",".join("?" for _ in product_ids)
+    rows = connection.execute(
+        f"""
+        SELECT product_id, barcode
+        FROM product_barcodes
+        WHERE product_id IN ({placeholders})
+        ORDER BY is_primary DESC, id ASC
+        """,
+        product_ids,
+    ).fetchall()
+
+    barcodes_by_product: dict[int, list[str]] = {product_id: [] for product_id in product_ids}
+    for row in rows:
+        barcodes_by_product.setdefault(int(row["product_id"]), []).append(str(row["barcode"]))
+    return barcodes_by_product
+
+
 def get_available_stock(product_id: int) -> float:
     """Return sellable stock from stock_qty, which is the inventory source of truth."""
     init_db()
@@ -587,48 +611,87 @@ def product_row_to_dict(
     return product
 
 
-def get_all_products() -> list[dict[str, Any]]:
+def product_rows_to_dicts(
+    connection: sqlite3.Connection,
+    rows: list[sqlite3.Row],
+) -> list[dict[str, Any]]:
+    product_ids = [int(row["id"]) for row in rows]
+    barcodes_by_product = fetch_barcodes_for_products(connection, product_ids)
+    return [
+        product_row_to_dict(row, barcodes_by_product.get(int(row["id"]), []))
+        for row in rows
+    ]
+
+
+def get_all_products(limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
     init_db()
     with get_connection() as connection:
-        cursor = connection.execute(
-            """
+        query = """
             SELECT id, barcode, name, price, category, stock_qty, requires_weight, image_path
             FROM products
             WHERE active = 1
             ORDER BY id DESC
             """
-        )
+        params: list[Any] = []
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        cursor = connection.execute(query, params)
         rows = cursor.fetchall()
-        return [
-            product_row_to_dict(row, fetch_product_barcodes(connection, int(row["id"])))
-            for row in rows
-        ]
+        return product_rows_to_dicts(connection, rows)
 
 
-def search_products(keyword: str) -> list[dict[str, Any]]:
+def search_products(
+    keyword: str,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
     init_db()
     clean_keyword = keyword.strip()
     if not clean_keyword:
-        return get_all_products()
+        return get_all_products(limit=limit, offset=offset)
 
     search_value = f"%{clean_keyword}%"
     with get_connection() as connection:
-        cursor = connection.execute(
-            """
+        query = """
             SELECT DISTINCT p.id, p.barcode, p.name, p.price, p.category, p.stock_qty, p.requires_weight, p.image_path
             FROM products p
             LEFT JOIN product_barcodes pb ON pb.product_id = p.id
             WHERE p.active = 1
               AND (p.name LIKE ? OR p.barcode LIKE ? OR p.sku LIKE ? OR pb.barcode LIKE ?)
             ORDER BY p.name ASC, p.id DESC
+            """
+        params: list[Any] = [search_value, search_value, search_value, search_value]
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        cursor = connection.execute(query, params)
+        rows = cursor.fetchall()
+        return product_rows_to_dicts(connection, rows)
+
+
+def count_products(keyword: str = "") -> int:
+    init_db()
+    clean_keyword = keyword.strip()
+    with get_connection() as connection:
+        if not clean_keyword:
+            row = connection.execute(
+                "SELECT COUNT(*) AS count FROM products WHERE active = 1"
+            ).fetchone()
+            return int(row["count"] if row else 0)
+
+        search_value = f"%{clean_keyword}%"
+        row = connection.execute(
+            """
+            SELECT COUNT(DISTINCT p.id) AS count
+            FROM products p
+            LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+            WHERE p.active = 1
+              AND (p.name LIKE ? OR p.barcode LIKE ? OR p.sku LIKE ? OR pb.barcode LIKE ?)
             """,
             (search_value, search_value, search_value, search_value),
-        )
-        rows = cursor.fetchall()
-        return [
-            product_row_to_dict(row, fetch_product_barcodes(connection, int(row["id"])))
-            for row in rows
-        ]
+        ).fetchone()
+        return int(row["count"] if row else 0)
 
 
 def get_product_by_id(product_id: int) -> dict[str, Any] | None:

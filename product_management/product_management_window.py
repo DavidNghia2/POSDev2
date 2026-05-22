@@ -1,8 +1,8 @@
 import sqlite3
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QDoubleValidator, QPixmap
+from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QDoubleValidator, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -18,18 +18,23 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QTableWidget,
-    QTableWidgetItem,
+    QStyle,
+    QStyledItemDelegate,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
 
 from database import db
+from login import get_setting
+from ui.currency import DEFAULT_CURRENCY_SYMBOL, format_money, get_currency_symbol_from_settings
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.thumbnail_cache import ThumbnailCache
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PRODUCT_TABLE_PAGE_SIZE = 250
 
 PRODUCT_MANAGEMENT_STYLESHEET = """
 QWidget {
@@ -206,7 +211,7 @@ QPushButton:pressed {
     padding-bottom: 11px;
 }
 
-QTableWidget {
+QTableView {
     background: #FFFFFF;
     border: 1px solid #D8E0E8;
     border-radius: 8px;
@@ -225,11 +230,19 @@ QHeaderView::section {
     padding: 10px;
 }
 
-QTableWidget::item {
+QTableView::item {
     border-bottom: 1px solid #EDF1F5;
     padding: 8px;
 }
 """ + MODERN_WIDGET_STYLESHEET
+
+
+def format_barcodes_for_display(barcodes: list[str]) -> str:
+    if not barcodes:
+        return ""
+    if len(barcodes) <= 3:
+        return ", ".join(barcodes)
+    return f"{barcodes[0]} + {len(barcodes) - 1} more"
 
 
 def set_label_pixmap(
@@ -239,24 +252,168 @@ def set_label_pixmap(
     width: int,
     height: int,
 ) -> None:
-    resolved_path = Path(image_path)
-    if image_path and not resolved_path.is_absolute():
-        resolved_path = PROJECT_ROOT / resolved_path
-    if image_path and resolved_path.exists():
-        pixmap = QPixmap(str(resolved_path))
-        if not pixmap.isNull():
-            label.setPixmap(
-                pixmap.scaled(
-                    width,
-                    height,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            )
-            label.setText("")
-            return
+    pixmap = ThumbnailCache.get(image_path, width, height, PROJECT_ROOT)
+    if not pixmap.isNull():
+        label.setPixmap(pixmap)
+        label.setText("")
+        return
     label.setPixmap(QPixmap())
     label.setText(fallback_text)
+
+
+class ProductTableModel(QAbstractTableModel):
+    HEADERS = [
+        "No",
+        "Image",
+        "Product Name",
+        "Barcodes",
+        "Price",
+        "Stock",
+        "Category",
+        "Requires Weight",
+        "Actions",
+    ]
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.products: list[dict] = []
+        self.offset = 0
+        self.currency_symbol = DEFAULT_CURRENCY_SYMBOL
+
+    def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self.products)
+
+    def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
+        if parent.isValid():
+            return 0
+        return len(self.HEADERS)
+
+    def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole):
+        if orientation == Qt.Orientation.Horizontal and role == Qt.ItemDataRole.DisplayRole:
+            return self.HEADERS[section]
+        return None
+
+    def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+
+        product = self.products[index.row()]
+        column = index.column()
+        if role == Qt.ItemDataRole.UserRole:
+            return int(product["id"])
+
+        if role == Qt.ItemDataRole.DecorationRole and column == 1:
+            pixmap = ThumbnailCache.get(str(product.get("image_path") or ""), 64, 48, PROJECT_ROOT)
+            return pixmap if not pixmap.isNull() else None
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            barcodes = list(product.get("barcodes") or [])
+            values = {
+                0: str(self.offset + index.row() + 1),
+                1: "No Image" if not str(product.get("image_path") or "") else "",
+                2: product["name"] or "",
+                3: format_barcodes_for_display(barcodes),
+                4: format_money(float(product["price"]), self.currency_symbol),
+                5: f'{float(product.get("stock_qty") or 0):g}',
+                6: product["category"] or "",
+                7: "Yes" if product["requires_weight"] else "No",
+                8: "",
+            }
+            return values.get(column, "")
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if column in (2, 3, 6):
+                return Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            return Qt.AlignmentFlag.AlignCenter
+
+        if role == Qt.ItemDataRole.SizeHintRole:
+            if column == 1:
+                return QSize(70, 54)
+            if column == 8:
+                return QSize(170, 54)
+
+        return None
+
+    def flags(self, index: QModelIndex) -> Qt.ItemFlag:
+        if not index.isValid():
+            return Qt.ItemFlag.NoItemFlags
+        return Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+
+    def set_products(self, products: list[dict], offset: int) -> None:
+        self.beginResetModel()
+        self.products = products
+        self.offset = offset
+        self.endResetModel()
+
+    def set_currency_symbol(self, currency_symbol: str) -> None:
+        if self.currency_symbol == currency_symbol:
+            return
+        self.currency_symbol = currency_symbol
+        if not self.products:
+            return
+        top_left = self.index(0, 4)
+        bottom_right = self.index(len(self.products) - 1, 4)
+        self.dataChanged.emit(top_left, bottom_right, [Qt.ItemDataRole.DisplayRole])
+
+    def product_id_at(self, row: int) -> int | None:
+        if row < 0 or row >= len(self.products):
+            return None
+        return int(self.products[row]["id"])
+
+
+class ProductActionsDelegate(QStyledItemDelegate):
+    edit_requested = pyqtSignal(int)
+    delete_requested = pyqtSignal(int)
+
+    def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, QColor("#DBEAFE"))
+
+        edit_rect, delete_rect = self.action_rects(option.rect)
+        self.draw_action_button(painter, edit_rect, "Edit", "#2563EB")
+        self.draw_action_button(painter, delete_rect, "Delete", "#DC2626")
+
+    def editorEvent(self, event, model, option, index: QModelIndex) -> bool:
+        if event.type() != QEvent.Type.MouseButtonRelease:
+            return False
+
+        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        edit_rect, delete_rect = self.action_rects(option.rect)
+        product_id = model.product_id_at(index.row())
+        if product_id is None:
+            return False
+
+        if edit_rect.contains(position):
+            self.edit_requested.emit(product_id)
+            return True
+        if delete_rect.contains(position):
+            self.delete_requested.emit(product_id)
+            return True
+        return False
+
+    def action_rects(self, cell_rect: QRect) -> tuple[QRect, QRect]:
+        button_height = 32
+        edit_width = 68
+        delete_width = 78
+        gap = 8
+        total_width = edit_width + gap + delete_width
+        left = cell_rect.left() + max((cell_rect.width() - total_width) // 2, 6)
+        top = cell_rect.top() + max((cell_rect.height() - button_height) // 2, 4)
+        edit_rect = QRect(left, top, edit_width, button_height)
+        delete_rect = QRect(left + edit_width + gap, top, delete_width, button_height)
+        return edit_rect, delete_rect
+
+    def draw_action_button(self, painter: QPainter, rect: QRect, text: str, color: str) -> None:
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(color))
+        painter.drawRoundedRect(rect, 7, 7)
+        painter.setPen(QColor("#FFFFFF"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
 
 
 class ProductDialog(QDialog):
@@ -576,6 +733,14 @@ class ProductManagementWindow(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         db.init_db()
+        self.current_offset = 0
+        self.page_size = PRODUCT_TABLE_PAGE_SIZE
+        self.total_products = 0
+        self.products_loaded = False
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(300)
+        self.search_timer.timeout.connect(self.apply_search_filter)
         self.create_ui()
         self.apply_styles()
         self.load_products()
@@ -591,7 +756,7 @@ class ProductManagementWindow(QWidget):
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search by Product Name or any Barcode...")
         self.search_input.setClearButtonEnabled(True)
-        self.search_input.textChanged.connect(self.load_products)
+        self.search_input.textChanged.connect(self.schedule_search)
 
         add_button = QPushButton("Add Product")
         add_button.setObjectName("primaryButton")
@@ -611,17 +776,16 @@ class ProductManagementWindow(QWidget):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
 
-        self.products_table = QTableWidget()
-        self.products_table.setColumnCount(9)
-        self.products_table.setHorizontalHeaderLabels(
-            ["No", "Image", "Product Name", "Barcodes", "Price", "Stock", "Category", "Requires Weight", "Actions"]
-        )
+        self.products_model = ProductTableModel(self)
+        self.products_table = QTableView()
+        self.products_table.setModel(self.products_model)
         self.products_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.products_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.products_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.products_table.setAlternatingRowColors(True)
         self.products_table.setShowGrid(False)
         self.products_table.setWordWrap(False)
+        self.products_table.setIconSize(QSize(64, 48))
         self.products_table.verticalHeader().setVisible(False)
         self.products_table.verticalHeader().setDefaultSectionSize(64)
         self.products_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -642,49 +806,83 @@ class ProductManagementWindow(QWidget):
         self.products_table.setColumnWidth(3, 220)
         self.products_table.setColumnWidth(8, 170)
 
+        actions_delegate = ProductActionsDelegate(self.products_table)
+        actions_delegate.edit_requested.connect(self.open_edit_dialog)
+        actions_delegate.delete_requested.connect(self.delete_product)
+        self.products_table.setItemDelegateForColumn(8, actions_delegate)
+        self.actions_delegate = actions_delegate
+
         layout.addWidget(self.products_table, 1)
+
+        pagination_layout = QHBoxLayout()
+        pagination_layout.setContentsMargins(0, 0, 0, 0)
+        pagination_layout.setSpacing(10)
+
+        self.pagination_label = QLabel("")
+        self.pagination_label.setObjectName("subtitleLabel")
+
+        self.previous_page_button = QPushButton("Previous")
+        self.previous_page_button.setObjectName("neutralButton")
+        self.previous_page_button.clicked.connect(self.previous_page)
+
+        self.next_page_button = QPushButton("Next")
+        self.next_page_button.setObjectName("primaryButton")
+        self.next_page_button.clicked.connect(self.next_page)
+
+        pagination_layout.addWidget(self.pagination_label, 1)
+        pagination_layout.addWidget(self.previous_page_button)
+        pagination_layout.addWidget(self.next_page_button)
+        layout.addLayout(pagination_layout)
         return panel
+
+    def schedule_search(self) -> None:
+        self.current_offset = 0
+        self.search_timer.start()
+
+    def apply_search_filter(self) -> None:
+        self.load_products()
 
     def load_products(self) -> None:
         keyword = self.search_input.text().strip()
-        products = db.search_products(keyword) if keyword else db.get_all_products()
+        self.total_products = db.count_products(keyword)
+        if self.total_products == 0:
+            self.current_offset = 0
+        elif self.current_offset >= self.total_products:
+            self.current_offset = ((self.total_products - 1) // self.page_size) * self.page_size
 
-        self.products_table.setRowCount(len(products))
-        for row_index, product in enumerate(products):
-            barcodes = list(product.get("barcodes") or [])
-            values = [
-                str(row_index + 1),
-                "",
-                product["name"] or "",
-                self.format_barcodes_for_table(barcodes),
-                f'{float(product["price"]):.2f}',
-                f'{float(product.get("stock_qty") or 0):g}',
-                product["category"] or "",
-                "Yes" if product["requires_weight"] else "No",
-            ]
+        products = db.search_products(
+            keyword,
+            limit=self.page_size,
+            offset=self.current_offset,
+        )
+        self.products_model.set_currency_symbol(get_currency_symbol_from_settings(get_setting))
+        self.products_model.set_products(products, self.current_offset)
+        self.products_loaded = True
+        self.update_pagination_controls()
 
-            for column_index, value in enumerate(values):
-                table_item = QTableWidgetItem(value)
-                if column_index == 0:
-                    table_item.setData(Qt.ItemDataRole.UserRole, int(product["id"]))
-                if column_index in (2, 3, 6):
-                    table_item.setTextAlignment(
-                        Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
-                    )
-                else:
-                    table_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.products_table.setItem(row_index, column_index, table_item)
-
-            self.products_table.setCellWidget(
-                row_index,
-                1,
-                self.create_table_image_label(str(product.get("image_path") or "")),
+    def update_pagination_controls(self) -> None:
+        if self.total_products == 0:
+            self.pagination_label.setText("No products found")
+        else:
+            start = self.current_offset + 1
+            end = min(self.current_offset + self.products_model.rowCount(), self.total_products)
+            self.pagination_label.setText(
+                f"Showing {start}-{end} of {self.total_products} products"
             )
-            self.products_table.setCellWidget(
-                row_index,
-                8,
-                self.create_action_buttons(int(product["id"])),
-            )
+        self.previous_page_button.setEnabled(self.current_offset > 0)
+        self.next_page_button.setEnabled(self.current_offset + self.page_size < self.total_products)
+
+    def previous_page(self) -> None:
+        if self.current_offset <= 0:
+            return
+        self.current_offset = max(0, self.current_offset - self.page_size)
+        self.load_products()
+
+    def next_page(self) -> None:
+        if self.current_offset + self.page_size >= self.total_products:
+            return
+        self.current_offset += self.page_size
+        self.load_products()
 
     def reload_data(self) -> None:
         self.load_products()
@@ -692,6 +890,7 @@ class ProductManagementWindow(QWidget):
     def open_add_dialog(self) -> None:
         dialog = ProductDialog(parent=self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.current_offset = 0
             self.load_products()
             self.data_changed.emit()
 
@@ -718,44 +917,11 @@ class ProductManagementWindow(QWidget):
         self.load_products()
         self.data_changed.emit()
 
-    def create_action_buttons(self, product_id: int) -> QWidget:
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(8)
-
-        edit_button = QPushButton("Edit")
-        edit_button.setObjectName("rowEditButton")
-        IconManager.apply_button(edit_button, "edit", IconManager.LIGHT, size=16)
-        edit_button.clicked.connect(lambda _checked=False, value=product_id: self.open_edit_dialog(value))
-
-        delete_button = QPushButton("Delete")
-        delete_button.setObjectName("rowDeleteButton")
-        IconManager.apply_button(delete_button, "delete", IconManager.LIGHT, size=16)
-        delete_button.clicked.connect(lambda _checked=False, value=product_id: self.delete_product(value))
-
-        layout.addWidget(edit_button)
-        layout.addWidget(delete_button)
-        return widget
-
-    def create_table_image_label(self, image_path: str) -> QLabel:
-        label = QLabel("No Image")
-        label.setObjectName("tableImage")
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setFixedSize(70, 54)
-        set_label_pixmap(label, image_path, "No Image", 64, 48)
-        return label
-
     def format_barcodes_for_table(self, barcodes: list[str]) -> str:
-        if not barcodes:
-            return ""
-        if len(barcodes) <= 3:
-            return ", ".join(barcodes)
-        return f"{barcodes[0]} + {len(barcodes) - 1} more"
+        return format_barcodes_for_display(barcodes)
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        self.load_products()
 
     def apply_styles(self) -> None:
         self.setStyleSheet(PRODUCT_MANAGEMENT_STYLESHEET)

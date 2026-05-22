@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from login import get_setting
+from ui.currency import format_money, get_currency_symbol_from_settings
 from ui.icon_manager import IconManager
 from ui.theme import MODERN_WIDGET_STYLESHEET
 
@@ -160,6 +162,10 @@ def get_low_stock_products(threshold: int = 10) -> list:
     return []
 
 
+def current_currency_symbol() -> str:
+    return get_currency_symbol_from_settings(get_setting)
+
+
 def clear_layout(layout: QLayout) -> None:
     while layout.count():
         item = layout.takeAt(0)
@@ -287,9 +293,19 @@ class AdminDashboardWindow(QWidget):
         stats_layout.setSpacing(16)
         
         self.sales_count_card = StatCard("Total Sales", "0", "sales", "Number of transactions")
-        self.revenue_card = StatCard("Revenue", "$0.00", "cash", "Total sales amount")
+        self.revenue_card = StatCard(
+            "Revenue",
+            format_money(0, current_currency_symbol()),
+            "cash",
+            "Total sales amount",
+        )
         self.items_sold_card = StatCard("Items Sold", "0", "items", "Products sold")
-        self.avg_transaction_card = StatCard("Avg. Transaction", "$0.00", "average", "Per sale")
+        self.avg_transaction_card = StatCard(
+            "Avg. Transaction",
+            format_money(0, current_currency_symbol()),
+            "average",
+            "Per sale",
+        )
         
         stats_layout.addWidget(self.sales_count_card)
         stats_layout.addWidget(self.revenue_card)
@@ -347,14 +363,15 @@ class AdminDashboardWindow(QWidget):
         end_date = self.end_date_input.date().toString("yyyy-MM-dd") + " 23:59:59"
         
         summary = get_sales_summary(start_date, end_date)
+        currency_symbol = current_currency_symbol()
         
         # Update stat cards
         self.sales_count_card.set_value(str(summary["count"]))
-        self.revenue_card.set_value(f"${summary['total']:,.2f}")
+        self.revenue_card.set_value(format_money(float(summary["total"]), currency_symbol))
         self.items_sold_card.set_value(str(summary["items_sold"]))
         
         avg = summary["total"] / summary["count"] if summary["count"] > 0 else 0
-        self.avg_transaction_card.set_value(f"${avg:,.2f}")
+        self.avg_transaction_card.set_value(format_money(float(avg), currency_symbol))
         
         # Update payment breakdown
         self.update_payment_breakdown(summary["payment_breakdown"])
@@ -364,6 +381,7 @@ class AdminDashboardWindow(QWidget):
 
     def update_payment_breakdown(self, payment_data: list) -> None:
         clear_layout(self.payment_table)
+        currency_symbol = current_currency_symbol()
         
         for payment in payment_data:
             row_layout = QHBoxLayout()
@@ -375,7 +393,7 @@ class AdminDashboardWindow(QWidget):
             count_label = QLabel(f"{payment['count']} sales")
             count_label.setObjectName("paymentCount")
             
-            amount_label = QLabel(f"${payment['total']:,.2f}")
+            amount_label = QLabel(format_money(float(payment["total"]), currency_symbol))
             amount_label.setObjectName("paymentAmount")
             amount_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             
@@ -393,6 +411,7 @@ class AdminDashboardWindow(QWidget):
 
     def update_top_products(self, start_date: str, end_date: str) -> None:
         clear_layout(self.top_products_layout)
+        currency_symbol = current_currency_symbol()
         
         top_products = get_top_products(start_date, end_date, 5)
         
@@ -407,7 +426,7 @@ class AdminDashboardWindow(QWidget):
             qty_label = QLabel(f"x{product['total_qty']}")
             qty_label.setObjectName("productQty")
             
-            sales_label = QLabel(f"${product['total_sales']:,.2f}")
+            sales_label = QLabel(format_money(float(product["total_sales"]), currency_symbol))
             sales_label.setObjectName("productSales")
             sales_label.setAlignment(Qt.AlignmentFlag.AlignRight)
             
