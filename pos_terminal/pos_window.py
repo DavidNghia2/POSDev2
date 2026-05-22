@@ -296,7 +296,6 @@ class PosMainWindow(QMainWindow):
             "load_registers",
             "load_settings",
             "load_report",
-            "load_logs",
         ):
             handler = getattr(page, method_name, None)
             if callable(handler):
