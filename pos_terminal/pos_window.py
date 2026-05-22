@@ -4,7 +4,7 @@ from pathlib import Path
 from textwrap import wrap
 
 from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -31,7 +31,14 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
-from product_management.product_management_window import ProductManagementWindow
+from ui.currency import (
+    format_money as format_currency,
+    get_currency_symbol_from_settings,
+    parse_money_text,
+    refresh_money_widgets,
+    set_money_label,
+    set_money_table_item,
+)
 from ui.icon_manager import IconManager
 
 # Admin imports
@@ -46,6 +53,7 @@ from login import add_cash_movement, clear_session, get_setting, has_permission,
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.qr_display import qr_focus_pixmap
 from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.thumbnail_cache import ThumbnailCache
 
 
 ACCENT_BLUE = "#2563EB"
@@ -59,6 +67,7 @@ WINDOW_BG = "#EEF2F6"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PAYMENT_QR_DISPLAY_SIZE = 280
 SPLIT_PAYMENT_QR_DISPLAY_SIZE = 210
+POS_PRODUCT_GRID_LIMIT = 120
 
 
 @dataclass
@@ -78,13 +87,44 @@ class CartItem:
 class SidebarButton(QPushButton):
     def __init__(self, text: str, icon, active: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
+        self.expanded_text = text
         self.setCheckable(True)
         self.setChecked(active)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setIcon(icon)
         self.setIconSize(QSize(18, 18))
+        self.setToolTip(text)
         self.setProperty("active", active)
+        self.setProperty("collapsed", False)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self.setText("" if collapsed else self.expanded_text)
+        self.setProperty("collapsed", collapsed)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
+class CollapsibleSidebar(QFrame):
+    EXPANDED_WIDTH = 230
+    COLLAPSED_WIDTH = 0
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("sidebar")
+        self.setProperty("collapsed", False)
+        self.setFixedWidth(self.EXPANDED_WIDTH)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        if collapsed:
+            self.setFixedWidth(self.COLLAPSED_WIDTH)
+            self.setVisible(False)
+        else:
+            self.setVisible(True)
+            self.setFixedWidth(self.EXPANDED_WIDTH)
+        self.setProperty("collapsed", collapsed)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
 
 class KeypadButton(QPushButton):
@@ -161,6 +201,14 @@ class PosMainWindow(QMainWindow):
         self.cart_table_updating = False
         self.admin_pages: dict = {}
         self.page_indexes: dict[str, int] = {}
+        self.product_management_placeholder: QWidget | None = None
+        self.sidebar_collapsed = False
+        self.sidebar_widget: CollapsibleSidebar | None = None
+        self.sidebar_layout: QVBoxLayout | None = None
+        self.sidebar_expanded_widgets: list[QWidget] = []
+        self.sidebar_toggle_button: QPushButton | None = None
+        self.central_container: QWidget | None = None
+        self.logout_button: QPushButton | None = None
         self.logout_requested = False
         self.reset_toast: QLabel | None = None
         self.reset_toast_effect: QGraphicsOpacityEffect | None = None
@@ -175,6 +223,7 @@ class PosMainWindow(QMainWindow):
     def build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
+        self.central_container = central
 
         root_layout = QHBoxLayout(central)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -197,8 +246,8 @@ class PosMainWindow(QMainWindow):
 
         self.product_management_page = None
         if has_permission(self.user_data, "products"):
-            self.product_management_page = ProductManagementWindow()
-            self.page_indexes["products"] = self.pages.addWidget(self.product_management_page)
+            self.product_management_placeholder = QWidget()
+            self.page_indexes["products"] = self.pages.addWidget(self.product_management_placeholder)
 
         if role_name == "Admin":
             self.admin_pages = {
@@ -221,19 +270,22 @@ class PosMainWindow(QMainWindow):
 
         root_layout.addWidget(self.create_sidebar())
         root_layout.addWidget(self.pages, 1)
+        self.create_sidebar_toggle_button()
 
     def connect_global_refresh(self) -> None:
         self.app_data_changed.connect(self.reload_data)
 
         for page_index in range(self.pages.count()):
-            page = self.pages.widget(page_index)
-            reload_handler = self.get_reload_handler(page)
-            if reload_handler is not None:
-                self.app_data_changed.connect(reload_handler)
+            self.connect_page_refresh(self.pages.widget(page_index))
 
-            data_changed_signal = getattr(page, "data_changed", None)
-            if data_changed_signal is not None:
-                data_changed_signal.connect(self.notify_app_data_changed)
+    def connect_page_refresh(self, page: QWidget) -> None:
+        reload_handler = self.get_reload_handler(page)
+        if reload_handler is not None:
+            self.app_data_changed.connect(reload_handler)
+
+        data_changed_signal = getattr(page, "data_changed", None)
+        if data_changed_signal is not None:
+            data_changed_signal.connect(self.notify_app_data_changed)
 
     def get_reload_handler(self, page: QWidget):
         for method_name in (
@@ -254,6 +306,24 @@ class PosMainWindow(QMainWindow):
     def notify_app_data_changed(self) -> None:
         self.app_data_changed.emit()
 
+    def ensure_product_management_page(self) -> QWidget | None:
+        products_index = self.page_indexes.get("products")
+        if products_index is None:
+            return None
+        if self.product_management_page is not None:
+            return self.product_management_page
+
+        from product_management.product_management_window import ProductManagementWindow
+
+        page = ProductManagementWindow()
+        old_page = self.pages.widget(products_index)
+        self.pages.removeWidget(old_page)
+        old_page.deleteLater()
+        self.pages.insertWidget(products_index, page)
+        self.product_management_page = page
+        self.connect_page_refresh(page)
+        return page
+
     def start_shared_data_refresh(self) -> None:
         self.shared_data_refresh_timer = QTimer(self)
         self.shared_data_refresh_timer.setInterval(5000)
@@ -264,6 +334,7 @@ class PosMainWindow(QMainWindow):
         if hasattr(self, "search_input"):
             self.load_product_grid()
         self.refresh_total()
+        refresh_money_widgets(self, self.get_currency_symbol())
 
     def get_setting_bool(self, key: str, default: bool = True) -> bool:
         value = get_setting(key)
@@ -272,11 +343,11 @@ class PosMainWindow(QMainWindow):
         return value.strip().lower() not in {"false", "0", "no", "off"}
 
     def get_currency_symbol(self) -> str:
-        return get_setting("currency_symbol") or get_setting("currency") or "$"
+        return get_currency_symbol_from_settings(get_setting)
 
     def format_money(self, amount: float, currency_symbol: str | None = None) -> str:
         symbol = currency_symbol if currency_symbol is not None else self.get_currency_symbol()
-        return f"{symbol or '$'}{amount:,.2f}"
+        return format_currency(amount, symbol)
 
     def resolve_setting_path(self, path_value: str) -> Path | None:
         if not path_value:
@@ -505,26 +576,29 @@ class PosMainWindow(QMainWindow):
         return page
 
     def create_sidebar(self) -> QWidget:
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(230)
+        sidebar = CollapsibleSidebar()
+        self.sidebar_widget = sidebar
 
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(20, 24, 20, 24)
         layout.setSpacing(10)
+        self.sidebar_layout = layout
 
         brand_row = QHBoxLayout()
         brand_row.setContentsMargins(0, 0, 0, 0)
-        brand_row.setSpacing(12)
+        brand_row.setSpacing(10)
 
         logo_label = QLabel()
         logo_label.setObjectName("brandLogo")
         logo_label.setFixedSize(42, 42)
         logo_label.setPixmap(app_logo_pixmap(42))
 
+        brand_text_widget = QWidget()
+        brand_text_widget.setObjectName("sidebarBrandText")
         brand_text = QVBoxLayout()
         brand_text.setContentsMargins(0, 0, 0, 0)
         brand_text.setSpacing(1)
+        brand_text_widget.setLayout(brand_text)
 
         title = QLabel("Retail POS")
         title.setObjectName("appTitle")
@@ -535,7 +609,9 @@ class PosMainWindow(QMainWindow):
         brand_text.addWidget(title)
         brand_text.addWidget(subtitle)
         brand_row.addWidget(logo_label)
-        brand_row.addLayout(brand_text, 1)
+        brand_row.addWidget(brand_text_widget, 1)
+
+        self.sidebar_expanded_widgets = [logo_label, brand_text_widget]
         layout.addLayout(brand_row)
         layout.addSpacing(22)
 
@@ -606,20 +682,77 @@ class PosMainWindow(QMainWindow):
 
         layout.addStretch(1)
 
-        logout_button = QPushButton("Logout")
-        logout_button.setObjectName("logoutButton")
-        logout_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        IconManager.apply_button(logout_button, "logout", IconManager.LIGHT)
-        logout_button.clicked.connect(self.request_logout)
-        layout.addWidget(logout_button)
+        self.logout_button = QPushButton("Logout")
+        self.logout_button.setObjectName("logoutButton")
+        self.logout_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.logout_button.setToolTip("Logout")
+        self.logout_button.setProperty("expandedText", "Logout")
+        self.logout_button.setProperty("collapsed", False)
+        IconManager.apply_button(self.logout_button, "logout", IconManager.LIGHT)
+        self.logout_button.clicked.connect(self.request_logout)
+        layout.addWidget(self.logout_button)
 
         footer = QLabel("Developed by DevTeam2")
         footer.setObjectName("sidebarFooter")
+        self.sidebar_expanded_widgets.append(footer)
         layout.addWidget(footer)
 
         return sidebar
 
+    def create_sidebar_toggle_button(self) -> None:
+        if self.central_container is None:
+            return
+        self.sidebar_toggle_button = QPushButton()
+        self.sidebar_toggle_button.setObjectName("sidebarToggleButton")
+        self.sidebar_toggle_button.setParent(self.central_container)
+        self.sidebar_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sidebar_toggle_button.setFixedSize(26, 48)
+        self.sidebar_toggle_button.setToolTip("Collapse sidebar")
+        self.sidebar_toggle_button.setIcon(IconManager.icon("sidebar_collapse"))
+        self.sidebar_toggle_button.setIconSize(QSize(16, 16))
+        self.sidebar_toggle_button.clicked.connect(self.toggle_sidebar)
+        self.sidebar_toggle_button.raise_()
+        QTimer.singleShot(0, self.position_sidebar_toggle_button)
+
+    def position_sidebar_toggle_button(self) -> None:
+        if self.central_container is None or self.sidebar_toggle_button is None:
+            return
+
+        button_width = self.sidebar_toggle_button.width()
+        button_height = self.sidebar_toggle_button.height()
+        sidebar_width = 0 if self.sidebar_collapsed or self.sidebar_widget is None else self.sidebar_widget.width()
+        x = max(0, sidebar_width - (button_width // 2))
+        y = max((self.central_container.height() - button_height) // 2, 0)
+        self.sidebar_toggle_button.move(x, y)
+        self.sidebar_toggle_button.raise_()
+
+    def toggle_sidebar(self) -> None:
+        self.set_sidebar_collapsed(not self.sidebar_collapsed)
+
+    def set_sidebar_collapsed(self, collapsed: bool) -> None:
+        if self.sidebar_widget is None or self.sidebar_layout is None:
+            return
+
+        self.sidebar_collapsed = collapsed
+        self.sidebar_widget.set_collapsed(collapsed)
+
+        if self.sidebar_toggle_button is not None:
+            self.sidebar_toggle_button.setToolTip("Expand sidebar" if collapsed else "Collapse sidebar")
+            self.sidebar_toggle_button.setIcon(
+                IconManager.icon("sidebar_expand" if collapsed else "sidebar_collapse")
+            )
+        QTimer.singleShot(0, self.position_sidebar_toggle_button)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.position_sidebar_toggle_button()
+
+
     def switch_page(self, page_index: int) -> None:
+        products_index = self.page_indexes.get("products")
+        if page_index == products_index:
+            self.ensure_product_management_page()
+
         self.pages.setCurrentIndex(page_index)
         for button, button_page_index in self.sidebar_buttons:
             is_active = button_page_index == page_index
@@ -630,8 +763,9 @@ class PosMainWindow(QMainWindow):
 
         if page_index == self.page_indexes.get("pos_terminal"):
             self.search_input.setFocus()
-        elif page_index == self.page_indexes.get("products") and self.product_management_page is not None:
-            self.product_management_page.load_products()
+        elif page_index == products_index and self.product_management_page is not None:
+            if not getattr(self.product_management_page, "products_loaded", False):
+                self.product_management_page.load_products()
 
     def create_content_area(self) -> QWidget:
         container = QWidget()
@@ -687,7 +821,11 @@ class PosMainWindow(QMainWindow):
         self.search_input.setPlaceholderText("Scan barcode or search product name...")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setObjectName("posSearchInput")
-        self.search_input.textChanged.connect(self.load_product_grid)
+        self.product_search_timer = QTimer(self)
+        self.product_search_timer.setSingleShot(True)
+        self.product_search_timer.setInterval(300)
+        self.product_search_timer.timeout.connect(self.load_product_grid)
+        self.search_input.textChanged.connect(self.schedule_product_grid_load)
         self.search_input.returnPressed.connect(self.handle_product_search)
         layout.addWidget(self.search_input)
 
@@ -704,12 +842,15 @@ class PosMainWindow(QMainWindow):
 
         layout.addWidget(self.product_scroll_area, 1)
 
-        footer = QLabel("Click a product card or scan/type a product name, then press Enter")
-        footer.setObjectName("statusHint")
-        layout.addWidget(footer)
+        self.product_grid_status_label = QLabel("Click a product card or scan/type a product name, then press Enter")
+        self.product_grid_status_label.setObjectName("statusHint")
+        layout.addWidget(self.product_grid_status_label)
 
         self.load_product_grid()
         return panel
+
+    def schedule_product_grid_load(self) -> None:
+        self.product_search_timer.start()
 
     def clear_product_grid(self) -> None:
         while self.product_grid_layout.count():
@@ -720,7 +861,13 @@ class PosMainWindow(QMainWindow):
 
     def load_product_grid(self) -> None:
         keyword = self.search_input.text().strip()
-        products = db.search_products(keyword) if keyword else db.get_all_products()
+        products = (
+            db.search_products(keyword, limit=POS_PRODUCT_GRID_LIMIT + 1)
+            if keyword
+            else db.get_all_products(limit=POS_PRODUCT_GRID_LIMIT + 1)
+        )
+        has_more_products = len(products) > POS_PRODUCT_GRID_LIMIT
+        products = products[:POS_PRODUCT_GRID_LIMIT]
 
         self.clear_product_grid()
         columns = 4
@@ -728,6 +875,14 @@ class PosMainWindow(QMainWindow):
             card = self.create_product_card(product)
             self.product_grid_layout.addWidget(card, index // columns, index % columns)
         self.product_grid_layout.setRowStretch((len(products) // columns) + 1, 1)
+        if has_more_products:
+            self.product_grid_status_label.setText(
+                f"Showing first {POS_PRODUCT_GRID_LIMIT} products. Search to narrow results."
+            )
+        else:
+            self.product_grid_status_label.setText(
+                "Click a product card or scan/type a product name, then press Enter"
+            )
 
     def create_product_card(self, product) -> QFrame:
         card = QFrame()
@@ -749,21 +904,10 @@ class PosMainWindow(QMainWindow):
         image_placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         image_placeholder.setMinimumHeight(76)
         image_path = str(product.get("image_path") or "")
-        resolved_image_path = Path(image_path)
-        if image_path and not resolved_image_path.is_absolute():
-            resolved_image_path = PROJECT_ROOT / resolved_image_path
-        if image_path and resolved_image_path.exists():
-            pixmap = QPixmap(str(resolved_image_path))
-            if not pixmap.isNull():
-                image_placeholder.setPixmap(
-                    pixmap.scaled(
-                        150,
-                        76,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
-                image_placeholder.setText("")
+        pixmap = ThumbnailCache.get(image_path, 150, 76, PROJECT_ROOT)
+        if not pixmap.isNull():
+            image_placeholder.setPixmap(pixmap)
+            image_placeholder.setText("")
 
         name_label = QLabel(str(product["name"]))
         name_label.setObjectName("productName")
@@ -776,9 +920,10 @@ class PosMainWindow(QMainWindow):
         barcode_label.setObjectName("productBarcode")
         barcode_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
-        price_label = QLabel(self.format_money(float(product["price"])))
+        price_label = QLabel()
         price_label.setObjectName("productPrice")
         price_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        set_money_label(price_label, float(product["price"]), self.get_currency_symbol())
 
         stock_label = QLabel("Out of stock" if is_out_of_stock else f"Stock: {available_qty:g}")
         stock_label.setObjectName("outOfStockLabel" if is_out_of_stock else "productStock")
@@ -867,10 +1012,11 @@ class PosMainWindow(QMainWindow):
         totals_layout.setContentsMargins(16, 14, 16, 14)
         totals_layout.setSpacing(10)
 
-        self.subtotal_value_label = QLabel(self.format_money(0))
+        self.subtotal_value_label = QLabel()
         self.subtotal_value_label.setObjectName("amountValue")
         self.subtotal_value_label.setMinimumWidth(120)
         self.subtotal_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        set_money_label(self.subtotal_value_label, 0, self.get_currency_symbol())
 
         self.discount_input = QLineEdit("0.00")
         self.discount_input.setObjectName("discountInput")
@@ -878,10 +1024,11 @@ class PosMainWindow(QMainWindow):
         self.discount_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
         self.discount_input.textChanged.connect(self.refresh_total)
 
-        self.total_value_label = QLabel(self.format_money(0))
+        self.total_value_label = QLabel()
         self.total_value_label.setObjectName("totalValue")
         self.total_value_label.setMinimumWidth(140)
         self.total_value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        set_money_label(self.total_value_label, 0, self.get_currency_symbol())
 
         totals_layout.addLayout(self.create_amount_row("Subtotal", self.subtotal_value_label))
         totals_layout.addLayout(self.create_amount_row("Discount", self.discount_input))
@@ -996,6 +1143,7 @@ class PosMainWindow(QMainWindow):
         self.close()
 
     def handle_product_search(self) -> None:
+        self.product_search_timer.stop()
         keyword = self.search_input.text().strip()
         if not keyword:
             return
@@ -1076,11 +1224,15 @@ class PosMainWindow(QMainWindow):
                 item.barcode,
                 item.name,
                 f"{item.qty:g}",
-                self.format_money(item.unit_price),
-                self.format_money(item.subtotal),
+                item.unit_price,
+                item.subtotal,
             ]
             for column, value in enumerate(values):
-                table_item = QTableWidgetItem(value)
+                table_item = QTableWidgetItem(str(value))
+                if column == 3:
+                    set_money_table_item(table_item, item.unit_price, self.get_currency_symbol())
+                elif column == 4:
+                    set_money_table_item(table_item, item.subtotal, self.get_currency_symbol())
                 table_item.setData(Qt.ItemDataRole.UserRole, item.product_id)
                 table_item.setData(Qt.ItemDataRole.UserRole + 1, item.barcode)
                 if column in (0, 1):
@@ -1186,8 +1338,8 @@ class PosMainWindow(QMainWindow):
         discount = min(self.get_discount_amount(), subtotal)
         grand_total = max(subtotal - discount, 0)
 
-        self.subtotal_value_label.setText(self.format_money(subtotal))
-        self.total_value_label.setText(self.format_money(grand_total))
+        set_money_label(self.subtotal_value_label, subtotal, self.get_currency_symbol())
+        set_money_label(self.total_value_label, grand_total, self.get_currency_symbol())
 
     def sync_status(self) -> None:
         selected = self.cart_table.currentRow()
@@ -1280,8 +1432,9 @@ class PosMainWindow(QMainWindow):
 
         grand_total_title = QLabel("Total Due")
         grand_total_title.setObjectName("paymentFieldLabel")
-        grand_total_value = QLabel(self.format_money(total_amount))
+        grand_total_value = QLabel()
         grand_total_value.setObjectName("paymentGrandTotal")
+        set_money_label(grand_total_value, total_amount, self.get_currency_symbol())
 
         amount_tendered_input = QLineEdit()
         amount_tendered_input.setPlaceholderText("Amount Tendered")
@@ -1289,8 +1442,9 @@ class PosMainWindow(QMainWindow):
         amount_tendered_input.setAlignment(Qt.AlignmentFlag.AlignRight)
         amount_tendered_input.setValidator(QDoubleValidator(0.0, 999999999.0, 2))
 
-        change_value = QLabel(self.format_money(0))
+        change_value = QLabel()
         change_value.setObjectName("paymentChangeValue")
+        set_money_label(change_value, 0, self.get_currency_symbol())
 
         note_input = QLineEdit()
         note_input.setPlaceholderText("Note")
@@ -1373,9 +1527,13 @@ class PosMainWindow(QMainWindow):
             try:
                 tendered_amount = self.parse_money(amount_tendered_input.text() or "0")
             except ValueError:
-                change_value.setText(self.format_money(0))
+                set_money_label(change_value, 0, self.get_currency_symbol())
                 return
-            change_value.setText(self.format_money(max(tendered_amount - total_amount, 0)))
+            set_money_label(
+                change_value,
+                max(tendered_amount - total_amount, 0),
+                self.get_currency_symbol(),
+            )
 
         def toggle_bank_transfer_ui(checked: bool) -> None:
             bank_qr_panel.setVisible(checked and bank_transfer_enabled)
@@ -1489,8 +1647,9 @@ class PosMainWindow(QMainWindow):
         layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(14)
 
-        total_label = QLabel(f"Total Amount: {self.format_money(total_amount)}")
+        total_label = QLabel()
         total_label.setObjectName("dialogTotalLabel")
+        set_money_label(total_label, total_amount, self.get_currency_symbol(), "Total Amount: ")
         layout.addWidget(total_label)
 
         content_layout = QHBoxLayout()
@@ -1654,16 +1813,7 @@ class PosMainWindow(QMainWindow):
         self.statusBar().showMessage("Transaction voided", 2500)
 
     def parse_money(self, value: str) -> float:
-        clean_value = value.strip().replace(",", "")
-        for symbol in {self.get_currency_symbol(), "$"}:
-            if symbol:
-                clean_value = clean_value.replace(symbol, "")
-        if not clean_value:
-            raise ValueError("Empty amount")
-        amount = float(clean_value)
-        if amount < 0:
-            raise ValueError("Negative amount")
-        return amount
+        return parse_money_text(value, self.get_currency_symbol())
 
     def get_cart_subtotal(self) -> float:
         return sum(item.subtotal for item in self.cart_items)
@@ -1989,6 +2139,26 @@ def build_stylesheet() -> str:
         font-size: 12px;
     }}
 
+    #sidebarBrandText {{
+        background: transparent;
+    }}
+
+    #sidebarToggleButton {{
+        background: #FFFFFF;
+        border: 1px solid {BORDER};
+        border-radius: 13px;
+        min-height: 48px;
+        max-height: 48px;
+        min-width: 26px;
+        max-width: 26px;
+        padding: 0;
+    }}
+
+    #sidebarToggleButton:hover {{
+        background: #F3F7FD;
+        border-color: rgba(37, 99, 235, 0.35);
+    }}
+
     #workspaceTitle {{
         font-size: 20px;
         font-weight: 700;
@@ -2020,6 +2190,11 @@ def build_stylesheet() -> str:
         color: {ACCENT_BLUE};
     }}
 
+    SidebarButton[collapsed="true"] {{
+        padding: 12px 0;
+        text-align: center;
+    }}
+
     #logoutButton {{
         background: #DC2626;
         border: none;
@@ -2029,6 +2204,11 @@ def build_stylesheet() -> str:
         font-weight: 700;
         padding: 12px 14px;
         text-align: left;
+    }}
+
+    #logoutButton[collapsed="true"] {{
+        padding: 12px 0;
+        text-align: center;
     }}
 
     #logoutButton:hover {{

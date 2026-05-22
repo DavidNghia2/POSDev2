@@ -99,6 +99,8 @@ class IconManager:
         "today": "mdi6.calendar-today",
         "week": "mdi6.calendar-week-outline",
         "month": "mdi6.calendar-month-outline",
+        "sidebar_collapse": "mdi6.chevron-left",
+        "sidebar_expand": "mdi6.chevron-right",
     }
 
     _icon_cache: dict[tuple[str, str], QIcon] = {}

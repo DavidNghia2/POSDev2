@@ -21,6 +21,8 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from login import get_setting
+from ui.currency import format_money, get_currency_symbol_from_settings
 from ui.icon_manager import IconManager
 from ui.theme import MODERN_WIDGET_STYLESHEET
 
@@ -133,6 +135,10 @@ def get_shift_summary(start_date: str, end_date: str) -> list:
             (start_date, end_date),
         )
         return cursor.fetchall()
+
+
+def current_currency_symbol() -> str:
+    return get_currency_symbol_from_settings(get_setting)
 
 
 class ReportsWindow(QWidget):
@@ -395,6 +401,7 @@ class ReportsWindow(QWidget):
 
     def load_daily_sales(self, start_date: str, end_date: str) -> None:
         data = get_sales_report(start_date, end_date)
+        currency_symbol = current_currency_symbol()
         
         self.report_table.setColumnCount(5)
         self.report_table.setHorizontalHeaderLabels([
@@ -408,7 +415,7 @@ class ReportsWindow(QWidget):
                 row["created_at"][:19] if row["created_at"] else "",
                 row["cashier_name"] or "N/A",
                 row["payment_method"],
-                f"${row['total_amount']:,.2f}",
+                format_money(float(row["total_amount"]), currency_symbol),
             ]
             
             for column_index, value in enumerate(values):
@@ -418,6 +425,7 @@ class ReportsWindow(QWidget):
 
     def load_voided_sales(self, start_date: str, end_date: str) -> None:
         data = get_voided_sales_report(start_date, end_date)
+        currency_symbol = current_currency_symbol()
         self.report_table.setColumnCount(5)
         self.report_table.setHorizontalHeaderLabels([
             "Sale ID", "Date/Time", "Cashier", "Payment", "Total"
@@ -430,7 +438,7 @@ class ReportsWindow(QWidget):
                 row["created_at"][:19] if row["created_at"] else "",
                 row["cashier_name"] or "N/A",
                 row["payment_method"],
-                f"${row['total_amount']:,.2f}",
+                format_money(float(row["total_amount"]), currency_symbol),
             ]
 
             for column_index, value in enumerate(values):
@@ -440,6 +448,7 @@ class ReportsWindow(QWidget):
 
     def load_sales_by_cashier(self, start_date: str, end_date: str) -> None:
         data = get_sales_by_cashier(start_date, end_date)
+        currency_symbol = current_currency_symbol()
         
         self.report_table.setColumnCount(4)
         self.report_table.setHorizontalHeaderLabels([
@@ -452,8 +461,8 @@ class ReportsWindow(QWidget):
             values = [
                 row["cashier_name"] or "N/A",
                 str(row["transaction_count"]),
-                f"${row['total_sales']:,.2f}",
-                f"${avg:,.2f}",
+                format_money(float(row["total_sales"]), currency_symbol),
+                format_money(float(avg), currency_symbol),
             ]
             
             for column_index, value in enumerate(values):
@@ -463,6 +472,7 @@ class ReportsWindow(QWidget):
 
     def load_shift_summary(self, start_date: str, end_date: str) -> None:
         data = get_shift_summary(start_date, end_date)
+        currency_symbol = current_currency_symbol()
         self.report_table.setColumnCount(8)
         self.report_table.setHorizontalHeaderLabels([
             "Shift", "Register", "Cashier", "Opened", "Closed",
@@ -477,8 +487,10 @@ class ReportsWindow(QWidget):
                 row["cashier_name"] or "N/A",
                 row["opened_at"][:19] if row["opened_at"] else "",
                 row["closed_at"][:19] if row["closed_at"] else "",
-                f"${row['opening_balance']:,.2f}",
-                f"${row['expected_balance']:,.2f}" if row["expected_balance"] is not None else "$0.00",
+                format_money(float(row["opening_balance"]), currency_symbol),
+                format_money(float(row["expected_balance"]), currency_symbol)
+                if row["expected_balance"] is not None
+                else format_money(0, currency_symbol),
                 row["status"],
             ]
 
@@ -489,6 +501,7 @@ class ReportsWindow(QWidget):
 
     def load_sales_by_payment(self, start_date: str, end_date: str) -> None:
         data = get_sales_by_payment(start_date, end_date)
+        currency_symbol = current_currency_symbol()
         
         self.report_table.setColumnCount(3)
         self.report_table.setHorizontalHeaderLabels([
@@ -500,7 +513,7 @@ class ReportsWindow(QWidget):
             values = [
                 row["payment_method"],
                 str(row["transaction_count"]),
-                f"${row['total_sales']:,.2f}",
+                format_money(float(row["total_sales"]), currency_symbol),
             ]
             
             for column_index, value in enumerate(values):
@@ -510,6 +523,7 @@ class ReportsWindow(QWidget):
 
     def load_sales_by_product(self, start_date: str, end_date: str) -> None:
         data = get_sales_by_product(start_date, end_date)
+        currency_symbol = current_currency_symbol()
         
         self.report_table.setColumnCount(4)
         self.report_table.setHorizontalHeaderLabels([
@@ -522,7 +536,7 @@ class ReportsWindow(QWidget):
                 row["barcode"] or "",
                 row["name"] or "",
                 str(row["quantity_sold"]),
-                f"${row['total_sales']:,.2f}",
+                format_money(float(row["total_sales"]), currency_symbol),
             ]
             
             for column_index, value in enumerate(values):
