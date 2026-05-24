@@ -1,4 +1,4 @@
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -28,6 +28,10 @@ class AuditLogsWindow(QWidget):
     def __init__(self, current_user: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_user = current_user
+        self.search_timer = QTimer(self)
+        self.search_timer.setSingleShot(True)
+        self.search_timer.setInterval(300)
+        self.search_timer.timeout.connect(self.load_logs)
         self.create_ui()
         self.load_logs()
 
@@ -82,7 +86,7 @@ class AuditLogsWindow(QWidget):
         self.user_filter = QLineEdit()
         self.user_filter.setPlaceholderText("Search user...")
         self.user_filter.setClearButtonEnabled(True)
-        self.user_filter.textChanged.connect(self.load_logs)
+        self.user_filter.textChanged.connect(self.schedule_search)
         filters_layout.addWidget(self.user_filter)
         
         # Limit
@@ -115,14 +119,18 @@ class AuditLogsWindow(QWidget):
         self.logs_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.logs_table.setAlternatingRowColors(True)
         self.logs_table.setShowGrid(False)
+        self.logs_table.setWordWrap(False)
+        self.logs_table.setSortingEnabled(False)
+        self.logs_table.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.logs_table.verticalHeader().setVisible(False)
+        self.logs_table.verticalHeader().setDefaultSectionSize(42)
         
         header = self.logs_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         
         self.logs_table.setColumnWidth(0, 60)
@@ -135,9 +143,13 @@ class AuditLogsWindow(QWidget):
         
         layout.addWidget(log_panel, 1)
 
+    def schedule_search(self) -> None:
+        self.search_timer.start()
+
     def load_logs(self) -> None:
         action = self.action_filter.currentText()
         user_keyword = self.user_filter.text().strip()
+        user_keyword_lower = user_keyword.lower()
         limit = int(self.limit_combo.currentText())
         
         all_logs = get_audit_logs(limit)
@@ -150,28 +162,39 @@ class AuditLogsWindow(QWidget):
             if user_keyword:
                 username = str(row_value(log, "username")).lower()
                 full_name = str(row_value(log, "full_name")).lower()
-                if user_keyword.lower() not in username and user_keyword.lower() not in full_name:
+                if user_keyword_lower not in username and user_keyword_lower not in full_name:
                     continue
             filtered_logs.append(log)
-        
-        self.logs_table.setRowCount(len(filtered_logs))
-        for row_index, log in enumerate(filtered_logs):
-            values = [
-                str(log["id"]),
-                log["created_at"][:19] if log["created_at"] else "",
-                row_value(log, "full_name", "System"),
-                log["action"],
-                log["table_name"] or "",
-                self.format_details(log),
-            ]
-            
-            for column_index, value in enumerate(values):
-                item = QTableWidgetItem(str(value))
-                if column_index == 5:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-                else:
-                    item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-                self.logs_table.setItem(row_index, column_index, item)
+
+        scroll_bar = self.logs_table.verticalScrollBar()
+        previous_scroll_value = scroll_bar.value()
+
+        self.logs_table.setUpdatesEnabled(False)
+        self.logs_table.blockSignals(True)
+        try:
+            self.logs_table.clearContents()
+            self.logs_table.setRowCount(len(filtered_logs))
+            for row_index, log in enumerate(filtered_logs):
+                values = [
+                    str(log["id"]),
+                    log["created_at"][:19] if log["created_at"] else "",
+                    row_value(log, "full_name", "System"),
+                    log["action"],
+                    log["table_name"] or "",
+                    self.format_details(log),
+                ]
+                
+                for column_index, value in enumerate(values):
+                    item = QTableWidgetItem(str(value))
+                    if column_index == 5:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    else:
+                        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    self.logs_table.setItem(row_index, column_index, item)
+        finally:
+            self.logs_table.blockSignals(False)
+            self.logs_table.setUpdatesEnabled(True)
+            scroll_bar.setValue(min(previous_scroll_value, scroll_bar.maximum()))
 
     def format_details(self, log: dict) -> str:
         details = []
