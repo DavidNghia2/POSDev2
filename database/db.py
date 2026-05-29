@@ -2,6 +2,8 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from database import cloud
+
 
 DB_PATH = Path(__file__).resolve().parents[1] / "pos.db"
 
@@ -28,6 +30,13 @@ def add_column_if_missing(
 
 
 def init_db() -> None:
+    if cloud.is_enabled():
+        try:
+            cloud.init_db()
+            return
+        except cloud.SupabaseError:
+            pass
+
     with get_connection() as connection:
         connection.execute(
             """
@@ -467,6 +476,9 @@ def fetch_barcodes_for_products(
 
 
 def get_available_stock(product_id: int) -> float:
+    if cloud.is_enabled():
+        return cloud.get_available_stock(product_id)
+
     """Return sellable stock from stock_qty, which is the inventory source of truth."""
     init_db()
     with get_connection() as connection:
@@ -486,6 +498,9 @@ def get_available_stock(product_id: int) -> float:
 
 
 def is_barcode_available(barcode: str) -> bool:
+    if cloud.is_enabled():
+        return cloud.is_barcode_available(barcode)
+
     init_db()
     clean_barcode = barcode.strip()
     if not clean_barcode:
@@ -506,6 +521,9 @@ def is_barcode_available(barcode: str) -> bool:
 
 
 def was_barcode_sold(barcode: str) -> bool:
+    if cloud.is_enabled():
+        return cloud.was_barcode_sold(barcode)
+
     init_db()
     clean_barcode = barcode.strip()
     if not clean_barcode:
@@ -624,6 +642,9 @@ def product_rows_to_dicts(
 
 
 def get_all_products(limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
+    if cloud.is_enabled():
+        return cloud.get_all_products(limit=limit, offset=offset)
+
     init_db()
     with get_connection() as connection:
         query = """
@@ -646,6 +667,9 @@ def search_products(
     limit: int | None = None,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
+    if cloud.is_enabled():
+        return cloud.search_products(keyword, limit=limit, offset=offset)
+
     init_db()
     clean_keyword = keyword.strip()
     if not clean_keyword:
@@ -671,6 +695,9 @@ def search_products(
 
 
 def count_products(keyword: str = "") -> int:
+    if cloud.is_enabled():
+        return cloud.count_products(keyword)
+
     init_db()
     clean_keyword = keyword.strip()
     with get_connection() as connection:
@@ -695,6 +722,9 @@ def count_products(keyword: str = "") -> int:
 
 
 def get_product_by_id(product_id: int) -> dict[str, Any] | None:
+    if cloud.is_enabled():
+        return cloud.get_product_by_id(product_id)
+
     init_db()
     with get_connection() as connection:
         row = connection.execute(
@@ -712,6 +742,9 @@ def get_product_by_id(product_id: int) -> dict[str, Any] | None:
 
 
 def get_product_by_barcode(barcode: str) -> dict[str, Any] | None:
+    if cloud.is_enabled():
+        return cloud.get_product_by_barcode(barcode)
+
     init_db()
     clean_barcode = barcode.strip()
     if not clean_barcode:
@@ -739,6 +772,9 @@ def get_product_by_barcode(barcode: str) -> dict[str, Any] | None:
 
 
 def barcode_exists(barcode: str, exclude_product_id: int | None = None) -> bool:
+    if cloud.is_enabled():
+        return cloud.barcode_exists(barcode, exclude_product_id)
+
     init_db()
     clean_barcode = barcode.strip()
     if not clean_barcode:
@@ -781,6 +817,12 @@ def add_product(
     image_path: str,
     barcodes: list[str],
 ) -> int:
+    if cloud.is_enabled():
+        try:
+            return cloud.add_product(name, price, category, stock_qty, requires_weight, image_path, barcodes)
+        except cloud.SupabaseError:
+            pass
+
     init_db()
     normalized_barcodes = normalize_barcodes(barcodes)
     primary_barcode = normalized_barcodes[0] if normalized_barcodes else None
@@ -812,6 +854,25 @@ def add_product(
             ],
         )
         connection.commit()
+        cloud.queue_offline_operation(
+            "product",
+            product_id,
+            "create",
+            {
+                "product": {
+                    "id": product_id,
+                    "barcode": primary_barcode,
+                    "name": name.strip(),
+                    "price": price,
+                    "category": category.strip(),
+                    "stock_qty": stock_qty,
+                    "requires_weight": bool(requires_weight),
+                    "active": True,
+                    "image_path": image_path.strip() or None,
+                },
+                "barcodes": normalized_barcodes,
+            },
+        )
         return product_id
 
 
@@ -825,6 +886,13 @@ def update_product(
     image_path: str,
     barcodes: list[str],
 ) -> None:
+    if cloud.is_enabled():
+        try:
+            cloud.update_product(product_id, name, price, category, stock_qty, requires_weight, image_path, barcodes)
+            return
+        except cloud.SupabaseError:
+            pass
+
     init_db()
     normalized_barcodes = normalize_barcodes(barcodes)
     primary_barcode = normalized_barcodes[0] if normalized_barcodes else None
@@ -859,16 +927,41 @@ def update_product(
             ],
         )
         connection.commit()
+        cloud.queue_offline_operation(
+            "product",
+            product_id,
+            "update",
+            {
+                "name": name,
+                "price": price,
+                "category": category,
+                "stock_qty": stock_qty,
+                "requires_weight": requires_weight,
+                "image_path": image_path,
+                "barcodes": barcodes,
+            },
+        )
 
 
 def delete_product(product_id: int) -> None:
+    if cloud.is_enabled():
+        try:
+            cloud.delete_product(product_id)
+            return
+        except cloud.SupabaseError:
+            pass
+
     init_db()
     with get_connection() as connection:
         connection.execute("UPDATE products SET active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (product_id,))
         connection.commit()
+        cloud.queue_offline_operation("product", product_id, "delete", {})
 
 
 def find_product_for_sale(keyword: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    if cloud.is_enabled():
+        return cloud.find_product_for_sale(keyword)
+
     clean_keyword = keyword.strip()
     if not clean_keyword:
         return None, []
@@ -906,6 +999,23 @@ def create_sale(
     note: str = "",
     payments: list[dict[str, Any]] | None = None,
 ) -> int:
+    if cloud.is_enabled():
+        try:
+            return cloud.create_sale(
+                total_amount,
+                payment_method,
+                sale_items,
+                user_id=user_id,
+                register_id=register_id,
+                shift_id=shift_id,
+                tendered_amount=tendered_amount,
+                change_amount=change_amount,
+                note=note,
+                payments=payments,
+            )
+        except cloud.SupabaseError:
+            pass
+
     init_db()
     with get_connection() as connection:
         ensure_sale_items_available(connection, sale_items)
@@ -957,29 +1067,58 @@ def create_sale(
             """,
             [(sale_id, payment["method"], payment["amount"]) for payment in payment_rows],
         )
-        connection.execute(
-            """
-            INSERT INTO sync_queue (entity_type, entity_id, operation, payload)
-            VALUES ('sale', ?, 'create', ?)
-            """,
-            (sale_id, f"sale_id={sale_id};total={total_amount:.2f}"),
-        )
         connection.commit()
+        cloud.queue_offline_operation(
+            "sale",
+            sale_id,
+            "create",
+            {
+                "sale": {
+                    "id": sale_id,
+                    "user_id": user_id,
+                    "register_id": register_id,
+                    "shift_id": shift_id,
+                    "total_amount": total_amount,
+                    "payment_method": payment_method,
+                    "tendered_amount": tendered_amount,
+                    "change_amount": change_amount,
+                    "note": note.strip(),
+                    "status": "completed",
+                },
+                "sale_items": [
+                    {
+                        "sale_id": sale_id,
+                        "product_id": item.get("product_id"),
+                        "barcode": item.get("barcode"),
+                        "name": item.get("name", ""),
+                        "qty": item["qty"],
+                        "price": item["price"],
+                        "subtotal": item["subtotal"],
+                    }
+                    for item in sale_items
+                ],
+                "payments": [
+                    {"sale_id": sale_id, "method": payment["method"], "amount": payment["amount"]}
+                    for payment in payment_rows
+                ],
+            },
+        )
         return sale_id
 
 
 def void_sale(sale_id: int) -> None:
+    if cloud.is_enabled():
+        try:
+            cloud.void_sale(sale_id)
+            return
+        except cloud.SupabaseError:
+            pass
+
     init_db()
     with get_connection() as connection:
         connection.execute(
             "UPDATE sales SET status = 'voided' WHERE id = ?",
             (sale_id,),
         )
-        connection.execute(
-            """
-            INSERT INTO sync_queue (entity_type, entity_id, operation, payload)
-            VALUES ('sale', ?, 'void', ?)
-            """,
-            (sale_id, f"sale_id={sale_id}"),
-        )
         connection.commit()
+        cloud.queue_offline_operation("sale", sale_id, "void", {})

@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from database import cloud
 from login import get_setting
 from ui.currency import format_money, get_currency_symbol_from_settings
 from ui.icon_manager import IconManager
@@ -23,6 +24,9 @@ from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 def get_sales_summary(start_date: str, end_date: str) -> dict:
+    if cloud.is_enabled():
+        return cloud.dashboard_summary(start_date, end_date)
+
     with db.get_connection() as connection:
         # Get total sales count and amount
         cursor = connection.execute(
@@ -114,6 +118,9 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
 
 
 def get_top_products(start_date: str, end_date: str, limit: int = 5) -> list:
+    if cloud.is_enabled():
+        return cloud.top_products(start_date, end_date, limit)
+
     with db.get_connection() as connection:
         cursor = connection.execute(
             """

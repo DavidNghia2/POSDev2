@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from database import cloud
 from login import get_setting
 from ui.currency import format_money, get_currency_symbol_from_settings
 from ui.icon_manager import IconManager
@@ -28,6 +29,9 @@ from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
 def get_sales_report(start_date: str, end_date: str) -> list:
+    if cloud.is_enabled():
+        return cloud.sales_report(start_date, end_date)
+
     with db.get_connection() as connection:
         cursor = connection.execute(
             """
@@ -45,6 +49,9 @@ def get_sales_report(start_date: str, end_date: str) -> list:
 
 
 def get_sales_by_cashier(start_date: str, end_date: str) -> list:
+    if cloud.is_enabled():
+        return cloud.sales_by_cashier(start_date, end_date)
+
     with db.get_connection() as connection:
         cursor = connection.execute(
             """
@@ -64,6 +71,9 @@ def get_sales_by_cashier(start_date: str, end_date: str) -> list:
 
 
 def get_sales_by_payment(start_date: str, end_date: str) -> list:
+    if cloud.is_enabled():
+        return cloud.sales_by_payment(start_date, end_date)
+
     with db.get_connection() as connection:
         cursor = connection.execute(
             """
@@ -82,6 +92,9 @@ def get_sales_by_payment(start_date: str, end_date: str) -> list:
 
 
 def get_sales_by_product(start_date: str, end_date: str) -> list:
+    if cloud.is_enabled():
+        return cloud.sales_by_product(start_date, end_date)
+
     with db.get_connection() as connection:
         cursor = connection.execute(
             """
@@ -103,6 +116,9 @@ def get_sales_by_product(start_date: str, end_date: str) -> list:
 
 
 def get_voided_sales_report(start_date: str, end_date: str) -> list:
+    if cloud.is_enabled():
+        return cloud.sales_report(start_date, end_date, status="voided")
+
     with db.get_connection() as connection:
         cursor = connection.execute(
             """
@@ -120,6 +136,9 @@ def get_voided_sales_report(start_date: str, end_date: str) -> list:
 
 
 def get_shift_summary(start_date: str, end_date: str) -> list:
+    if cloud.is_enabled():
+        return cloud.shift_summary(start_date, end_date)
+
     with db.get_connection() as connection:
         cursor = connection.execute(
             """

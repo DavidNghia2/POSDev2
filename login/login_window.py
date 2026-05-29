@@ -3,6 +3,8 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from database import cloud
+
 from PyQt6.QtCore import QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
@@ -55,6 +57,13 @@ def hash_password(password: str) -> str:
 
 
 def init_auth_db() -> None:
+    if cloud.is_enabled():
+        try:
+            cloud.init_auth_db()
+            return
+        except cloud.SupabaseError:
+            pass
+
     with get_connection() as connection:
         # Create roles table
         connection.execute(
@@ -228,6 +237,9 @@ def init_auth_db() -> None:
 
 
 def get_all_users() -> list[sqlite3.Row]:
+    if cloud.is_enabled():
+        return cloud.get_all_users()
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute(
@@ -242,6 +254,9 @@ def get_all_users() -> list[sqlite3.Row]:
 
 
 def get_user_by_username(username: str) -> sqlite3.Row | None:
+    if cloud.is_enabled():
+        return cloud.get_user_by_username(username)
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute(
@@ -257,6 +272,9 @@ def get_user_by_username(username: str) -> sqlite3.Row | None:
 
 
 def get_user_by_id(user_id: int) -> sqlite3.Row | None:
+    if cloud.is_enabled():
+        return cloud.get_user_by_id(user_id)
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute(
@@ -283,6 +301,9 @@ def has_permission(user: dict[str, Any], permission: str) -> bool:
 
 
 def get_all_roles() -> list[sqlite3.Row]:
+    if cloud.is_enabled():
+        return cloud.get_all_roles()
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute("SELECT id, name, permissions FROM roles ORDER BY id")
@@ -290,6 +311,9 @@ def get_all_roles() -> list[sqlite3.Row]:
 
 
 def get_all_registers() -> list[sqlite3.Row]:
+    if cloud.is_enabled():
+        return cloud.get_all_registers()
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute("SELECT id, name, location, active FROM registers WHERE active = 1 ORDER BY id")
@@ -297,6 +321,9 @@ def get_all_registers() -> list[sqlite3.Row]:
 
 
 def get_open_shift(register_id: int) -> sqlite3.Row | None:
+    if cloud.is_enabled():
+        return cloud.get_open_shift(register_id)
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute(
@@ -313,6 +340,12 @@ def get_open_shift(register_id: int) -> sqlite3.Row | None:
 
 
 def open_cash_shift(register_id: int, user_id: int, opening_balance: float = 0) -> int:
+    if cloud.is_enabled():
+        try:
+            return cloud.open_cash_shift(register_id, user_id, opening_balance)
+        except cloud.SupabaseError:
+            pass
+
     init_auth_db()
     existing_shift = get_open_shift(register_id)
     if existing_shift is not None:
@@ -339,6 +372,10 @@ def open_cash_shift(register_id: int, user_id: int, opening_balance: float = 0) 
 
 
 def add_cash_movement(shift_id: int, user_id: int, movement_type: str, amount: float, reason: str) -> None:
+    if cloud.is_enabled():
+        cloud.add_cash_movement(shift_id, user_id, movement_type, amount, reason)
+        return
+
     init_auth_db()
     with get_connection() as connection:
         connection.execute(
@@ -361,6 +398,10 @@ def add_cash_movement(shift_id: int, user_id: int, movement_type: str, amount: f
 
 
 def close_cash_shift(shift_id: int, user_id: int, closing_balance: float) -> None:
+    if cloud.is_enabled():
+        cloud.close_cash_shift(shift_id, user_id, closing_balance)
+        return
+
     init_auth_db()
     with get_connection() as connection:
         connection.execute(
@@ -382,6 +423,9 @@ def close_cash_shift(shift_id: int, user_id: int, closing_balance: float) -> Non
 
 
 def add_user(username: str, password: str, full_name: str, role_id: int) -> int:
+    if cloud.is_enabled():
+        return cloud.add_user(username, password, full_name, role_id)
+
     init_auth_db()
     with get_connection() as connection:
         existing_user = connection.execute(
@@ -401,6 +445,10 @@ def add_user(username: str, password: str, full_name: str, role_id: int) -> int:
 
 
 def update_user(user_id: int, username: str, full_name: str, role_id: int, new_password: str | None = None) -> None:
+    if cloud.is_enabled():
+        cloud.update_user(user_id, username, full_name, role_id, new_password)
+        return
+
     init_auth_db()
     with get_connection() as connection:
         user = connection.execute(
@@ -431,6 +479,10 @@ def update_user(user_id: int, username: str, full_name: str, role_id: int, new_p
 
 
 def delete_user(user_id: int, current_user_id: int | None = None) -> None:
+    if cloud.is_enabled():
+        cloud.delete_user(user_id, current_user_id)
+        return
+
     init_auth_db()
     with get_connection() as connection:
         user = connection.execute(
@@ -463,6 +515,9 @@ def delete_user(user_id: int, current_user_id: int | None = None) -> None:
 
 
 def add_register(name: str, location: str) -> int:
+    if cloud.is_enabled():
+        return cloud.add_register(name, location)
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute(
@@ -474,6 +529,10 @@ def add_register(name: str, location: str) -> int:
 
 
 def update_register(register_id: int, name: str, location: str) -> None:
+    if cloud.is_enabled():
+        cloud.update_register(register_id, name, location)
+        return
+
     init_auth_db()
     with get_connection() as connection:
         connection.execute(
@@ -484,6 +543,10 @@ def update_register(register_id: int, name: str, location: str) -> None:
 
 
 def delete_register(register_id: int) -> None:
+    if cloud.is_enabled():
+        cloud.delete_register(register_id)
+        return
+
     init_auth_db()
     with get_connection() as connection:
         connection.execute("UPDATE registers SET active = 0 WHERE id = ?", (register_id,))
@@ -492,6 +555,10 @@ def delete_register(register_id: int) -> None:
 
 def log_audit(user_id: int, action: str, table_name: str | None = None, record_id: int | None = None, 
              old_values: str | None = None, new_values: str | None = None) -> None:
+    if cloud.is_enabled():
+        cloud.log_audit(user_id, action, table_name, record_id, old_values, new_values)
+        return
+
     with get_connection() as connection:
         connection.execute(
             "INSERT INTO audit_logs (user_id, action, table_name, record_id, old_values, new_values) VALUES (?, ?, ?, ?, ?, ?)",
@@ -501,6 +568,9 @@ def log_audit(user_id: int, action: str, table_name: str | None = None, record_i
 
 
 def get_audit_logs(limit: int = 100) -> list[sqlite3.Row]:
+    if cloud.is_enabled():
+        return cloud.get_audit_logs(limit)
+
     with get_connection() as connection:
         cursor = connection.execute(
             """
@@ -517,6 +587,9 @@ def get_audit_logs(limit: int = 100) -> list[sqlite3.Row]:
 
 
 def get_setting(key: str) -> str | None:
+    if cloud.is_enabled():
+        return cloud.get_setting(key)
+
     init_auth_db()
     with get_connection() as connection:
         cursor = connection.execute("SELECT value FROM settings WHERE key = ?", (key,))
@@ -525,6 +598,10 @@ def get_setting(key: str) -> str | None:
 
 
 def set_setting(key: str, value: str) -> None:
+    if cloud.is_enabled():
+        cloud.set_setting(key, value)
+        return
+
     init_auth_db()
     with get_connection() as connection:
         connection.execute(
@@ -550,6 +627,10 @@ def save_session(user_id: int) -> None:
 
 
 def clear_session() -> None:
+    if cloud.is_enabled():
+        cloud.clear_session()
+        return
+
     init_auth_db()
     with get_connection() as connection:
         connection.execute("DELETE FROM settings WHERE key = 'session_user_id'")

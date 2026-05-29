@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 from database import db
+from database import cloud
 from ui.currency import (
     format_money as format_currency,
     get_currency_symbol_from_settings,
@@ -200,6 +201,7 @@ class PosMainWindow(QMainWindow):
         self.sidebar_buttons: list[tuple[SidebarButton, int]] = []
         self.cart_table_updating = False
         self.admin_pages: dict = {}
+        self.admin_page_factories: dict = {}
         self.page_indexes: dict[str, int] = {}
         self.product_management_placeholder: QWidget | None = None
         self.sidebar_collapsed = False
@@ -250,23 +252,23 @@ class PosMainWindow(QMainWindow):
             self.page_indexes["products"] = self.pages.addWidget(self.product_management_placeholder)
 
         if role_name == "Admin":
-            self.admin_pages = {
-                "admin_dashboard": create_admin_dashboard(self.user_data),
-                "users": create_user_management(self.user_data),
-                "registers": create_register_management(self.user_data),
-                "reports": create_reports(self.user_data),
-                "audit_logs": create_audit_logs(self.user_data),
-                "settings": create_settings(self.user_data),
+            self.admin_page_factories = {
+                "admin_dashboard": lambda: create_admin_dashboard(self.user_data),
+                "users": lambda: create_user_management(self.user_data),
+                "registers": lambda: create_register_management(self.user_data),
+                "reports": lambda: create_reports(self.user_data),
+                "audit_logs": lambda: create_audit_logs(self.user_data),
+                "settings": lambda: create_settings(self.user_data),
             }
         elif role_name == "Manager":
-            self.admin_pages = {
-                "reports": create_reports(self.user_data),
-                "registers": create_register_management(self.user_data),
-                "audit_logs": create_audit_logs(self.user_data),
+            self.admin_page_factories = {
+                "reports": lambda: create_reports(self.user_data),
+                "registers": lambda: create_register_management(self.user_data),
+                "audit_logs": lambda: create_audit_logs(self.user_data),
             }
 
-        for key, page in self.admin_pages.items():
-            self.page_indexes[key] = self.pages.addWidget(page)
+        for key in self.admin_page_factories:
+            self.page_indexes[key] = self.pages.addWidget(QWidget())
 
         root_layout.addWidget(self.create_sidebar())
         root_layout.addWidget(self.pages, 1)
@@ -323,11 +325,46 @@ class PosMainWindow(QMainWindow):
         self.connect_page_refresh(page)
         return page
 
+    def ensure_admin_page(self, page_key: str) -> QWidget | None:
+        page_index = self.page_indexes.get(page_key)
+        if page_index is None:
+            return None
+        if page_key in self.admin_pages:
+            return self.admin_pages[page_key]
+
+        factory = self.admin_page_factories.get(page_key)
+        if factory is None:
+            return None
+
+        page = factory()
+        old_page = self.pages.widget(page_index)
+        self.pages.removeWidget(old_page)
+        old_page.deleteLater()
+        self.pages.insertWidget(page_index, page)
+        self.admin_pages[page_key] = page
+        self.connect_page_refresh(page)
+        return page
+
     def start_shared_data_refresh(self) -> None:
         self.shared_data_refresh_timer = QTimer(self)
-        self.shared_data_refresh_timer.setInterval(5000)
+        self.shared_data_refresh_timer.setInterval(3000 if cloud.supabase_key() else 5000)
         self.shared_data_refresh_timer.timeout.connect(self.notify_app_data_changed)
         self.shared_data_refresh_timer.start()
+
+        self.sync_queue_timer = QTimer(self)
+        self.sync_queue_timer.setInterval(15000)
+        self.sync_queue_timer.timeout.connect(self.flush_offline_sync_queue)
+        self.sync_queue_timer.start()
+        QTimer.singleShot(2500, self.flush_offline_sync_queue)
+
+    def flush_offline_sync_queue(self) -> None:
+        try:
+            synced_count = cloud.flush_sync_queue()
+        except cloud.SupabaseError:
+            return
+        if synced_count:
+            self.statusBar().showMessage(f"Synced {synced_count} offline change(s) to Supabase", 5000)
+            self.notify_app_data_changed()
 
     def reload_data(self) -> None:
         if hasattr(self, "search_input"):
@@ -444,6 +481,9 @@ class PosMainWindow(QMainWindow):
         return bank_qr_panel
 
     def get_today_summary(self) -> dict[str, float | int]:
+        if cloud.is_enabled():
+            return cloud.today_summary()
+
         today = datetime.now().strftime("%Y-%m-%d")
         with db.get_connection() as connection:
             sales_row = connection.execute(
@@ -751,6 +791,11 @@ class PosMainWindow(QMainWindow):
         products_index = self.page_indexes.get("products")
         if page_index == products_index:
             self.ensure_product_management_page()
+        else:
+            for page_key, known_page_index in self.page_indexes.items():
+                if page_index == known_page_index:
+                    self.ensure_admin_page(page_key)
+                    break
 
         self.pages.setCurrentIndex(page_index)
         for button, button_page_index in self.sidebar_buttons:
@@ -860,11 +905,19 @@ class PosMainWindow(QMainWindow):
 
     def load_product_grid(self) -> None:
         keyword = self.search_input.text().strip()
-        products = (
-            db.search_products(keyword, limit=POS_PRODUCT_GRID_LIMIT + 1)
-            if keyword
-            else db.get_all_products(limit=POS_PRODUCT_GRID_LIMIT + 1)
-        )
+        try:
+            products = (
+                db.search_products(keyword, limit=POS_PRODUCT_GRID_LIMIT + 1)
+                if keyword
+                else db.get_all_products(limit=POS_PRODUCT_GRID_LIMIT + 1)
+            )
+        except cloud.SupabaseError:
+            cloud.disable_for_process()
+            products = (
+                db.search_products(keyword, limit=POS_PRODUCT_GRID_LIMIT + 1)
+                if keyword
+                else db.get_all_products(limit=POS_PRODUCT_GRID_LIMIT + 1)
+            )
         has_more_products = len(products) > POS_PRODUCT_GRID_LIMIT
         products = products[:POS_PRODUCT_GRID_LIMIT]
 
