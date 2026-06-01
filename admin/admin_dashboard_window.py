@@ -24,16 +24,18 @@ from ui.theme import MODERN_WIDGET_STYLESHEET
 
 def get_sales_summary(start_date: str, end_date: str) -> dict:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         # Get total sales count and amount
         cursor = connection.execute(
             """
             SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
             FROM sales
-            WHERE datetime(created_at, 'localtime') >= datetime(?)
+            WHERE store_id = ?
+              AND datetime(created_at, 'localtime') >= datetime(?)
               AND datetime(created_at, 'localtime') <= datetime(?)
               AND status = 'completed'
             """,
-            (start_date, end_date),
+            (store_id, start_date, end_date),
         )
         row = cursor.fetchone()
         
@@ -45,12 +47,13 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
             WHERE sale_id IN (
                 SELECT id
                 FROM sales
-                WHERE datetime(created_at, 'localtime') >= datetime(?)
+                WHERE store_id = ?
+                  AND datetime(created_at, 'localtime') >= datetime(?)
                   AND datetime(created_at, 'localtime') <= datetime(?)
                 AND status = 'completed'
-            )
+            ) AND store_id = ?
             """,
-            (start_date, end_date),
+            (store_id, start_date, end_date, store_id),
         )
         items_row = cursor.fetchone()
         
@@ -61,7 +64,8 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
                 SELECT sp.sale_id, sp.method as payment_method, sp.amount
                 FROM sale_payments sp
                 JOIN sales s ON s.id = sp.sale_id
-                WHERE datetime(s.created_at, 'localtime') >= datetime(?)
+                WHERE sp.store_id = ? AND s.store_id = ?
+                  AND datetime(s.created_at, 'localtime') >= datetime(?)
                   AND datetime(s.created_at, 'localtime') <= datetime(?)
                   AND s.status = 'completed'
 
@@ -69,11 +73,12 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
 
                 SELECT s.id as sale_id, s.payment_method, s.total_amount as amount
                 FROM sales s
-                WHERE datetime(s.created_at, 'localtime') >= datetime(?)
+                WHERE s.store_id = ?
+                  AND datetime(s.created_at, 'localtime') >= datetime(?)
                   AND datetime(s.created_at, 'localtime') <= datetime(?)
                   AND s.status = 'completed'
                   AND NOT EXISTS (
-                      SELECT 1 FROM sale_payments sp WHERE sp.sale_id = s.id
+                      SELECT 1 FROM sale_payments sp WHERE sp.sale_id = s.id AND sp.store_id = ?
                   )
             )
             SELECT payment_method,
@@ -83,7 +88,7 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
             GROUP BY payment_method
             ORDER BY total DESC
             """,
-            (start_date, end_date, start_date, end_date),
+            (store_id, store_id, start_date, end_date, store_id, start_date, end_date, store_id),
         )
         payment_stats = cursor.fetchall()
         
@@ -93,10 +98,11 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
             """
             SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
             FROM sales
-            WHERE date(created_at, 'localtime') = date(?)
+            WHERE store_id = ?
+              AND date(created_at, 'localtime') = date(?)
               AND status = 'completed'
             """,
-            (today,),
+            (store_id, today),
         )
         today_row = cursor.fetchone()
         
@@ -115,6 +121,7 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
 
 def get_top_products(start_date: str, end_date: str, limit: int = 5) -> list:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             WITH resolved_items AS (
@@ -138,11 +145,13 @@ def get_top_products(start_date: str, end_date: str, limit: int = 5) -> list:
                     si.subtotal
                 FROM sale_items si
                 JOIN sales s ON s.id = si.sale_id
-                LEFT JOIN products product_by_id ON product_by_id.id = si.product_id
+                LEFT JOIN products product_by_id ON product_by_id.id = si.product_id AND product_by_id.store_id = ?
                 LEFT JOIN products product_by_barcode
                     ON si.product_id IS NULL
                    AND product_by_barcode.barcode = si.barcode
-                WHERE datetime(s.created_at, 'localtime') >= datetime(?)
+                   AND product_by_barcode.store_id = ?
+                WHERE si.store_id = ? AND s.store_id = ?
+                  AND datetime(s.created_at, 'localtime') >= datetime(?)
                   AND datetime(s.created_at, 'localtime') <= datetime(?)
                   AND s.status = 'completed'
             )
@@ -152,7 +161,7 @@ def get_top_products(start_date: str, end_date: str, limit: int = 5) -> list:
             ORDER BY total_sales DESC
             LIMIT ?
             """,
-            (start_date, end_date, limit),
+            (store_id, store_id, store_id, store_id, start_date, end_date, limit),
         )
         return cursor.fetchall()
 

@@ -23,7 +23,11 @@ If Python 3.12 is not found:
 .\setup.ps1 -PythonVersion 3.11
 ```
 
-The app uses `pos.db` in the project folder. Product Management and POS Terminal both read and write products through the same SQLite database.
+The app creates its runtime SQLite cache at `%LOCALAPPDATA%\RetailPOS\pos.db` on Windows. Do not package or commit the project-folder `pos.db`; Supabase is the source of truth and SQLite is only a local cache. For development, set `POS_DB_PATH` in `.env` if you need a custom database path.
+
+For cloud stores, product edits sync to Supabase and checkout uses the Supabase `checkout_sale` RPC so payment, sales, and inventory stock are committed together. Offline checkout is limited to Admin users and is saved locally as pending until the next sync.
+
+For a fresh Supabase backend, follow `supabase/SETUP_NEW_PROJECT.md`, then update `.env` with the new Supabase URL and anon key.
 
 The app logo is stored at `assets/app_logo.png`; keep that file in the project when copying or packaging the app.
 

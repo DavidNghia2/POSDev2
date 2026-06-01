@@ -29,23 +29,25 @@ from ui.theme import MODERN_WIDGET_STYLESHEET
 
 def get_sales_report(start_date: str, end_date: str) -> list:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             SELECT s.id, s.total_amount, s.payment_method, s.created_at,
                    u.username as cashier_name
             FROM sales s
             LEFT JOIN users u ON s.user_id = u.id
-            WHERE s.created_at >= ? AND s.created_at <= ?
+            WHERE s.store_id = ? AND s.created_at >= ? AND s.created_at <= ?
               AND s.status = 'completed'
             ORDER BY s.id DESC
             """,
-            (start_date, end_date),
+            (store_id, start_date, end_date),
         )
         return cursor.fetchall()
 
 
 def get_sales_by_cashier(start_date: str, end_date: str) -> list:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             SELECT u.username as cashier_name, 
@@ -53,74 +55,78 @@ def get_sales_by_cashier(start_date: str, end_date: str) -> list:
                    COALESCE(SUM(s.total_amount), 0) as total_sales
             FROM sales s
             LEFT JOIN users u ON s.user_id = u.id
-            WHERE s.created_at >= ? AND s.created_at <= ?
+            WHERE s.store_id = ? AND s.created_at >= ? AND s.created_at <= ?
               AND s.status = 'completed'
             GROUP BY s.user_id
             ORDER BY total_sales DESC
             """,
-            (start_date, end_date),
+            (store_id, start_date, end_date),
         )
         return cursor.fetchall()
 
 
 def get_sales_by_payment(start_date: str, end_date: str) -> list:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             SELECT payment_method,
                    COUNT(*) as transaction_count,
                    COALESCE(SUM(total_amount), 0) as total_sales
             FROM sales
-            WHERE created_at >= ? AND created_at <= ?
+            WHERE store_id = ? AND created_at >= ? AND created_at <= ?
               AND status = 'completed'
             GROUP BY payment_method
             ORDER BY total_sales DESC
             """,
-            (start_date, end_date),
+            (store_id, start_date, end_date),
         )
         return cursor.fetchall()
 
 
 def get_sales_by_product(start_date: str, end_date: str) -> list:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             SELECT si.barcode, si.name,
                    SUM(si.qty) as quantity_sold,
                    SUM(si.subtotal) as total_sales
             FROM sale_items si
-            WHERE si.sale_id IN (
-                SELECT id FROM sales WHERE created_at >= ? AND created_at <= ?
+            WHERE si.store_id = ? AND si.sale_id IN (
+                SELECT id FROM sales WHERE store_id = ? AND created_at >= ? AND created_at <= ?
                 AND status = 'completed'
             )
             GROUP BY si.barcode, si.name
             ORDER BY total_sales DESC
             LIMIT 50
             """,
-            (start_date, end_date),
+            (store_id, store_id, start_date, end_date),
         )
         return cursor.fetchall()
 
 
 def get_voided_sales_report(start_date: str, end_date: str) -> list:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             SELECT s.id, s.total_amount, s.payment_method, s.created_at,
                    u.username as cashier_name
             FROM sales s
             LEFT JOIN users u ON s.user_id = u.id
-            WHERE s.created_at >= ? AND s.created_at <= ?
+            WHERE s.store_id = ? AND s.created_at >= ? AND s.created_at <= ?
               AND s.status = 'voided'
             ORDER BY s.id DESC
             """,
-            (start_date, end_date),
+            (store_id, start_date, end_date),
         )
         return cursor.fetchall()
 
 
 def get_shift_summary(start_date: str, end_date: str) -> list:
     with db.get_connection() as connection:
+        store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             SELECT cs.id, r.name as register_name, u.username as cashier_name,
@@ -129,10 +135,10 @@ def get_shift_summary(start_date: str, end_date: str) -> list:
             FROM cash_shifts cs
             LEFT JOIN registers r ON cs.register_id = r.id
             LEFT JOIN users u ON cs.user_id = u.id
-            WHERE cs.opened_at >= ? AND cs.opened_at <= ?
+            WHERE cs.store_id = ? AND cs.opened_at >= ? AND cs.opened_at <= ?
             ORDER BY cs.id DESC
             """,
-            (start_date, end_date),
+            (store_id, start_date, end_date),
         )
         return cursor.fetchall()
 

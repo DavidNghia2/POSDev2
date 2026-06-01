@@ -27,7 +27,7 @@ def main() -> int:
         apply_app_icon(window)
         window.statusBar().showMessage(f"POS terminal ready - Logged in as {user['full_name']}")
         window.show()
-
+    
         app.exec()
         if not window.logout_requested:
             return 0

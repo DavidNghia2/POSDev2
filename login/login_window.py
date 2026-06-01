@@ -1,6 +1,5 @@
 import sqlite3
 import hashlib
-from pathlib import Path
 from typing import Any
 
 from PyQt6.QtCore import QRectF, Qt
@@ -11,6 +10,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -24,9 +24,21 @@ from PyQt6.QtWidgets import (
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.icon_manager import IconManager
 from ui.theme import MODERN_WIDGET_STYLESHEET
+from app_paths import database_path
+from cloud import auth as cloud_auth
+from cloud import inventory as cloud_inventory
+from cloud.supabase_client import SupabaseConfigError, get_supabase_settings
 
 
-DB_PATH = Path(__file__).resolve().parents[1] / "pos.db"
+DB_PATH = database_path()
+DEFAULT_LOCAL_STORE_ID = "local-default-store"
+GLOBAL_SETTING_KEYS = {
+    "session_user_id",
+    "session_cloud_auth_id",
+    "session_supabase_url",
+    "current_store_id",
+    "remember_login",
+}
 
 
 def get_connection() -> sqlite3.Connection:
@@ -56,6 +68,17 @@ def hash_password(password: str) -> str:
 
 def init_auth_db() -> None:
     with get_connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stores (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                owner_user_id TEXT,
+                active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
         # Create roles table
         connection.execute(
             """
@@ -177,28 +200,65 @@ def init_auth_db() -> None:
             """
         )
         add_column_if_missing(connection, "cash_movements", "user_id", "user_id INTEGER")
+        add_column_if_missing(connection, "users", "cloud_auth_id", "cloud_auth_id TEXT")
+        add_column_if_missing(connection, "users", "email", "email TEXT")
+        add_column_if_missing(connection, "users", "store_id", "store_id TEXT")
+        add_column_if_missing(connection, "users", "sync_status", "sync_status TEXT DEFAULT 'local'")
+        add_column_if_missing(connection, "users", "last_synced_at", "last_synced_at TEXT")
+        add_column_if_missing(connection, "registers", "store_id", "store_id TEXT")
+        add_column_if_missing(connection, "registers", "cloud_id", "cloud_id TEXT")
+        add_column_if_missing(connection, "registers", "sync_status", "sync_status TEXT DEFAULT 'local'")
+        add_column_if_missing(connection, "registers", "last_synced_at", "last_synced_at TEXT")
+        add_column_if_missing(connection, "cash_shifts", "store_id", "store_id TEXT")
+        add_column_if_missing(connection, "cash_movements", "store_id", "store_id TEXT")
+        add_column_if_missing(connection, "audit_logs", "store_id", "store_id TEXT")
+        add_column_if_missing(connection, "settings", "store_id", "store_id TEXT")
+        add_column_if_missing(connection, "sync_queue", "store_id", "store_id TEXT")
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO stores (id, name, owner_user_id, active)
+            VALUES (?, 'Local Demo Store', NULL, 1)
+            """,
+            (DEFAULT_LOCAL_STORE_ID,),
+        )
+        for table_name in ("users", "registers", "cash_shifts", "cash_movements", "audit_logs", "sync_queue"):
+            connection.execute(
+                f"UPDATE {table_name} SET store_id = ? WHERE store_id IS NULL OR TRIM(store_id) = ''",
+                (DEFAULT_LOCAL_STORE_ID,),
+            )
         connection.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (username)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_users_email ON users (email)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_users_cloud_auth ON users (cloud_auth_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_users_store ON users (store_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_roles_name ON roles (name)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_registers_active ON registers (active)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_registers_store ON registers (store_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_registers_cloud ON registers (store_id, cloud_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_cash_shifts_status ON cash_shifts (status)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_cash_shifts_register ON cash_shifts (register_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_cash_shifts_store ON cash_shifts (store_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_cash_movements_shift ON cash_movements (shift_id)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_cash_movements_store ON cash_movements (store_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_created ON audit_logs (created_at)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_audit_logs_store ON audit_logs (store_id)")
         connection.execute("CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue (status)")
+        connection.execute("CREATE INDEX IF NOT EXISTS idx_sync_queue_store ON sync_queue (store_id)")
         
         connection.commit()
         
-        # Insert default roles if not exist
-        cursor = connection.execute("SELECT COUNT(*) FROM roles")
-        if cursor.fetchone()[0] == 0:
-            connection.executemany(
-                "INSERT INTO roles (name, permissions) VALUES (?, ?)",
-                [
-                    ("Admin", "all"),
-                    ("Manager", "sales,reports,products,registers,shifts,reconciliation"),
-                    ("Cashier", "sales,shifts"),
-                ]
-            )
+        default_roles = [
+            ("Admin", "all"),
+            ("Manager", "sales,reports,products,registers,shifts,reconciliation"),
+            ("Cashier", "sales,shifts"),
+        ]
+        connection.executemany(
+            """
+            INSERT INTO roles (name, permissions)
+            VALUES (?, ?)
+            ON CONFLICT(name) DO UPDATE SET permissions = excluded.permissions
+            """,
+            default_roles,
+        )
         
         default_users = [
             ("admin", "admin123", "Administrator", 1),
@@ -212,31 +272,228 @@ def init_auth_db() -> None:
             )
             if cursor.fetchone()[0] == 0:
                 connection.execute(
-                    "INSERT INTO users (username, password_hash, full_name, role_id) VALUES (?, ?, ?, ?)",
-                    (username, hash_password(password), full_name, role_id),
+                    """
+                    INSERT INTO users (username, email, password_hash, full_name, role_id, store_id)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (username, username, hash_password(password), full_name, role_id, DEFAULT_LOCAL_STORE_ID),
                 )
+        connection.execute(
+            "UPDATE users SET store_id = ? WHERE store_id IS NULL OR TRIM(store_id) = ''",
+            (DEFAULT_LOCAL_STORE_ID,),
+        )
         
         # Insert default register if not exists
         cursor = connection.execute("SELECT COUNT(*) FROM registers")
         if cursor.fetchone()[0] == 0:
             connection.execute(
-                "INSERT INTO registers (name, location) VALUES (?, ?)",
-                ("Main Register", "Store Front")
+                "INSERT INTO registers (name, location, store_id) VALUES (?, ?, ?)",
+                ("Main Register", "Store Front", DEFAULT_LOCAL_STORE_ID)
             )
+        connection.execute(
+            "UPDATE registers SET store_id = ? WHERE store_id IS NULL OR TRIM(store_id) = ''",
+            (DEFAULT_LOCAL_STORE_ID,),
+        )
         
         connection.commit()
+
+
+def current_store_id_from_connection(connection: sqlite3.Connection) -> str:
+    row = connection.execute(
+        "SELECT value FROM settings WHERE key = 'current_store_id' LIMIT 1"
+    ).fetchone()
+    if row is not None and str(row["value"] or "").strip():
+        return str(row["value"])
+    return DEFAULT_LOCAL_STORE_ID
+
+
+def get_current_store_id() -> str:
+    init_auth_db()
+    with get_connection() as connection:
+        return current_store_id_from_connection(connection)
+
+
+def set_current_store_id(store_id: str) -> None:
+    clean_store_id = store_id.strip() or DEFAULT_LOCAL_STORE_ID
+    with get_connection() as connection:
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO settings (key, value, store_id, updated_at)
+            VALUES ('current_store_id', ?, NULL, CURRENT_TIMESTAMP)
+            """,
+            (clean_store_id,),
+        )
+        connection.commit()
+
+
+def role_name_for_id(role_id: int) -> str:
+    init_auth_db()
+    with get_connection() as connection:
+        row = connection.execute("SELECT name FROM roles WHERE id = ?", (role_id,)).fetchone()
+    if row is None:
+        raise ValueError("Role not found.")
+    return str(row["name"])
+
+
+def ensure_local_role(connection: sqlite3.Connection, role_name: str, permissions: str) -> int:
+    row = connection.execute("SELECT id FROM roles WHERE name = ?", (role_name,)).fetchone()
+    if row is not None:
+        connection.execute(
+            "UPDATE roles SET permissions = ? WHERE id = ?",
+            (permissions, int(row["id"])),
+        )
+        return int(row["id"])
+    cursor = connection.execute(
+        "INSERT INTO roles (name, permissions) VALUES (?, ?)",
+        (role_name, permissions),
+    )
+    return int(cursor.lastrowid)
+
+
+def sync_profile_to_local(profile: dict[str, Any]) -> dict[str, Any]:
+    init_auth_db()
+    store_id = str(profile.get("store_id") or DEFAULT_LOCAL_STORE_ID)
+    store_name = str(profile.get("store_name") or "Store")
+    cloud_auth_id = str(profile.get("cloud_auth_id") or profile.get("auth_user_id") or "")
+    email = str(profile.get("email") or profile.get("username") or "").strip()
+    full_name = str(profile.get("full_name") or email or "User").strip()
+    role_name = str(profile.get("role_name") or "Cashier")
+    permissions = str(profile.get("permissions") or "")
+    active = 1 if bool(profile.get("active", True)) else 0
+    if not email:
+        raise ValueError("Supabase profile is missing an email address.")
+
+    with get_connection() as connection:
+        role_id = ensure_local_role(connection, role_name, permissions)
+        connection.execute(
+            """
+            INSERT INTO stores (id, name, owner_user_id, active)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                owner_user_id = COALESCE(stores.owner_user_id, excluded.owner_user_id),
+                active = 1
+            """,
+            (store_id, store_name, cloud_auth_id or None),
+        )
+        existing = None
+        if cloud_auth_id:
+            existing = connection.execute(
+                "SELECT id FROM users WHERE cloud_auth_id = ?",
+                (cloud_auth_id,),
+            ).fetchone()
+        if existing is None:
+            existing = connection.execute(
+                "SELECT id FROM users WHERE email = ? AND store_id = ?",
+                (email, store_id),
+            ).fetchone()
+        if existing is None:
+            existing = connection.execute(
+                """
+                SELECT id
+                FROM users
+                WHERE email = ? OR username = ?
+                ORDER BY CASE WHEN store_id = ? THEN 0 ELSE 1 END, id DESC
+                LIMIT 1
+                """,
+                (email, email, store_id),
+            ).fetchone()
+
+        if existing is None:
+            cursor = connection.execute(
+                """
+                INSERT INTO users (
+                    username, email, password_hash, full_name, role_id, active,
+                    cloud_auth_id, store_id, sync_status, last_synced_at
+                )
+                VALUES (?, ?, 'supabase$managed', ?, ?, ?, ?, ?, 'synced', CURRENT_TIMESTAMP)
+                """,
+                (email, email, full_name, role_id, active, cloud_auth_id or None, store_id),
+            )
+            user_id = int(cursor.lastrowid)
+        else:
+            user_id = int(existing["id"])
+            connection.execute(
+                """
+                UPDATE users
+                SET username = ?, email = ?, full_name = ?, role_id = ?, active = ?,
+                    cloud_auth_id = COALESCE(?, cloud_auth_id), store_id = ?,
+                    sync_status = 'synced', last_synced_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (email, email, full_name, role_id, active, cloud_auth_id or None, store_id, user_id),
+            )
+
+        connection.execute(
+            """
+            INSERT OR REPLACE INTO settings (key, value, store_id, updated_at)
+            VALUES ('current_store_id', ?, NULL, CURRENT_TIMESTAMP)
+            """,
+            (store_id,),
+        )
+        connection.commit()
+
+    with get_connection() as connection:
+        user = connection.execute(
+            """
+            SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id, u.password_hash,
+                   u.full_name, u.role_id, r.name as role_name, r.permissions
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+    if user is None:
+        raise ValueError("Could not cache Supabase profile locally.")
+    return build_user_payload(user)
+
+
+def sync_store_data_from_cloud() -> None:
+    try:
+        pull_registers_from_cloud()
+    except Exception as error:
+        print(f"Cloud register sync skipped: {error}")
+
+    try:
+        from database import db
+
+        db.sync_on_login()
+    except Exception as error:
+        print(f"Cloud sync skipped: {error}")
+
+
+def login_with_supabase(email: str, password: str) -> dict[str, Any]:
+    user = sync_profile_to_local(cloud_auth.login(email, password))
+    sync_store_data_from_cloud()
+    return user
+
+
+def register_store_owner(store_name: str, full_name: str, email: str, password: str) -> dict[str, Any]:
+    user = sync_profile_to_local(cloud_auth.register_store_owner(store_name, full_name, email, password))
+    sync_store_data_from_cloud()
+    return user
+
+
+def refresh_store_users_from_cloud() -> None:
+    for profile in cloud_auth.list_store_users():
+        sync_profile_to_local(profile)
 
 
 def get_all_users() -> list[sqlite3.Row]:
     init_auth_db()
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
-            SELECT u.id, u.username, u.full_name, r.name as role_name, u.active, u.created_at
+            SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id, u.full_name,
+                   r.name as role_name, u.active, u.created_at
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.store_id = ?
             ORDER BY u.id DESC
-            """
+            """,
+            (store_id,),
         )
         return cursor.fetchall()
 
@@ -244,14 +501,16 @@ def get_all_users() -> list[sqlite3.Row]:
 def get_user_by_username(username: str) -> sqlite3.Row | None:
     init_auth_db()
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
-            SELECT u.id, u.username, u.password_hash, u.full_name, u.role_id, r.name as role_name, r.permissions
+            SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id, u.password_hash,
+                   u.full_name, u.role_id, r.name as role_name, r.permissions
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
-            WHERE u.username = ? AND u.active = 1
+            WHERE (u.username = ? OR u.email = ?) AND u.store_id = ? AND u.active = 1
             """,
-            (username,),
+            (username, username, store_id),
         )
         return cursor.fetchone()
 
@@ -261,12 +520,29 @@ def get_user_by_id(user_id: int) -> sqlite3.Row | None:
     with get_connection() as connection:
         cursor = connection.execute(
             """
-            SELECT u.id, u.username, u.password_hash, u.full_name, u.role_id, r.name as role_name, r.permissions
+            SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id, u.password_hash,
+                   u.full_name, u.role_id, r.name as role_name, r.permissions
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE u.id = ? AND u.active = 1
             """,
             (user_id,),
+        )
+        return cursor.fetchone()
+
+
+def get_user_by_cloud_auth_id(cloud_auth_id: str) -> sqlite3.Row | None:
+    init_auth_db()
+    with get_connection() as connection:
+        cursor = connection.execute(
+            """
+            SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id, u.password_hash,
+                   u.full_name, u.role_id, r.name as role_name, r.permissions
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.cloud_auth_id = ? AND u.active = 1
+            """,
+            (cloud_auth_id,),
         )
         return cursor.fetchone()
 
@@ -292,22 +568,116 @@ def get_all_roles() -> list[sqlite3.Row]:
 def get_all_registers() -> list[sqlite3.Row]:
     init_auth_db()
     with get_connection() as connection:
-        cursor = connection.execute("SELECT id, name, location, active FROM registers WHERE active = 1 ORDER BY id")
+        store_id = current_store_id_from_connection(connection)
+        cursor = connection.execute(
+            "SELECT id, name, location, active FROM registers WHERE active = 1 AND store_id = ? ORDER BY id",
+            (store_id,),
+        )
         return cursor.fetchall()
+
+
+def get_default_register_id() -> int:
+    init_auth_db()
+    with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
+        row = connection.execute(
+            """
+            SELECT id
+            FROM registers
+            WHERE active = 1 AND store_id = ?
+            ORDER BY id
+            LIMIT 1
+            """,
+            (store_id,),
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
+        cursor = connection.execute(
+            """
+            INSERT INTO registers (name, location, store_id)
+            VALUES ('Main Register', 'Store Front', ?)
+            """,
+            (store_id,),
+        )
+        connection.commit()
+        return int(cursor.lastrowid)
+
+
+def pull_registers_from_cloud() -> None:
+    init_auth_db()
+    with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
+
+    rows = cloud_inventory.fetch_registers(store_id)
+    with get_connection() as connection:
+        for register in rows:
+            cloud_id = str(register.get("id") or "")
+            name = str(register.get("name") or "Register").strip()
+            if not cloud_id or not name:
+                continue
+            existing = connection.execute(
+                "SELECT id FROM registers WHERE store_id = ? AND cloud_id = ? LIMIT 1",
+                (store_id, cloud_id),
+            ).fetchone()
+            if existing is None:
+                existing = connection.execute(
+                    """
+                    SELECT id
+                    FROM registers
+                    WHERE store_id = ? AND lower(name) = lower(?)
+                    ORDER BY id
+                    LIMIT 1
+                    """,
+                    (store_id, name),
+                ).fetchone()
+            if existing is None:
+                connection.execute(
+                    """
+                    INSERT INTO registers (
+                        store_id, cloud_id, name, location, active, sync_status, last_synced_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'synced', CURRENT_TIMESTAMP)
+                    """,
+                    (
+                        store_id,
+                        cloud_id,
+                        name,
+                        register.get("location"),
+                        int(bool(register.get("active", True))),
+                    ),
+                )
+            else:
+                connection.execute(
+                    """
+                    UPDATE registers
+                    SET cloud_id = ?, name = ?, location = ?, active = ?,
+                        sync_status = 'synced', last_synced_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (
+                        cloud_id,
+                        name,
+                        register.get("location"),
+                        int(bool(register.get("active", True))),
+                        int(existing["id"]),
+                    ),
+                )
+        connection.commit()
 
 
 def get_open_shift(register_id: int) -> sqlite3.Row | None:
     init_auth_db()
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
-            SELECT id, register_id, user_id, opened_at, opening_balance, status
+            SELECT id, store_id, register_id, user_id, opened_at, opening_balance, status
             FROM cash_shifts
-            WHERE register_id = ? AND status = 'open'
+            WHERE register_id = ? AND store_id = ? AND status = 'open'
             ORDER BY id DESC
             LIMIT 1
             """,
-            (register_id,),
+            (register_id, store_id),
         )
         return cursor.fetchone()
 
@@ -319,20 +689,21 @@ def open_cash_shift(register_id: int, user_id: int, opening_balance: float = 0) 
         return int(existing_shift["id"])
 
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
-            INSERT INTO cash_shifts (register_id, user_id, opening_balance, expected_balance, status)
-            VALUES (?, ?, ?, ?, 'open')
+            INSERT INTO cash_shifts (store_id, register_id, user_id, opening_balance, expected_balance, status)
+            VALUES (?, ?, ?, ?, ?, 'open')
             """,
-            (register_id, user_id, opening_balance, opening_balance),
+            (store_id, register_id, user_id, opening_balance, opening_balance),
         )
         shift_id = int(cursor.lastrowid)
         connection.execute(
             """
-            INSERT INTO cash_movements (shift_id, user_id, type, amount, reason)
-            VALUES (?, ?, 'open', ?, 'Opening balance')
+            INSERT INTO cash_movements (store_id, shift_id, user_id, type, amount, reason)
+            VALUES (?, ?, ?, 'open', ?, 'Opening balance')
             """,
-            (shift_id, user_id, opening_balance),
+            (store_id, shift_id, user_id, opening_balance),
         )
         connection.commit()
         return shift_id
@@ -341,21 +712,22 @@ def open_cash_shift(register_id: int, user_id: int, opening_balance: float = 0) 
 def add_cash_movement(shift_id: int, user_id: int, movement_type: str, amount: float, reason: str) -> None:
     init_auth_db()
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         connection.execute(
             """
-            INSERT INTO cash_movements (shift_id, user_id, type, amount, reason)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO cash_movements (store_id, shift_id, user_id, type, amount, reason)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (shift_id, user_id, movement_type, amount, reason),
+            (store_id, shift_id, user_id, movement_type, amount, reason),
         )
         delta = amount if movement_type in {"open", "cash_in", "sale"} else -amount
         connection.execute(
             """
             UPDATE cash_shifts
             SET expected_balance = COALESCE(expected_balance, opening_balance, 0) + ?
-            WHERE id = ? AND status = 'open'
+            WHERE id = ? AND store_id = ? AND status = 'open'
             """,
-            (delta, shift_id),
+            (delta, shift_id, store_id),
         )
         connection.commit()
 
@@ -363,71 +735,60 @@ def add_cash_movement(shift_id: int, user_id: int, movement_type: str, amount: f
 def close_cash_shift(shift_id: int, user_id: int, closing_balance: float) -> None:
     init_auth_db()
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         connection.execute(
             """
             UPDATE cash_shifts
             SET closed_at = CURRENT_TIMESTAMP, closing_balance = ?, status = 'closed'
-            WHERE id = ? AND status = 'open'
+            WHERE id = ? AND store_id = ? AND status = 'open'
             """,
-            (closing_balance, shift_id),
+            (closing_balance, shift_id, store_id),
         )
         connection.execute(
             """
-            INSERT INTO cash_movements (shift_id, user_id, type, amount, reason)
-            VALUES (?, ?, 'close', ?, 'Closing balance')
+            INSERT INTO cash_movements (store_id, shift_id, user_id, type, amount, reason)
+            VALUES (?, ?, ?, 'close', ?, 'Closing balance')
             """,
-            (shift_id, user_id, closing_balance),
+            (store_id, shift_id, user_id, closing_balance),
         )
         connection.commit()
 
 
-def add_user(username: str, password: str, full_name: str, role_id: int) -> int:
-    init_auth_db()
-    with get_connection() as connection:
-        existing_user = connection.execute(
-            "SELECT id FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
-
-        if existing_user is not None:
-            raise ValueError("That username is already in use.")
-
-        cursor = connection.execute(
-            "INSERT INTO users (username, password_hash, full_name, role_id) VALUES (?, ?, ?, ?)",
-            (username, hash_password(password), full_name, role_id),
-        )
-        connection.commit()
-        return int(cursor.lastrowid)
+def add_user(email: str, password: str, full_name: str, role_id: int) -> int:
+    role_name = role_name_for_id(role_id)
+    user = sync_profile_to_local(cloud_auth.admin_create_user(email, password, full_name, role_name))
+    return int(user["id"])
 
 
-def update_user(user_id: int, username: str, full_name: str, role_id: int, new_password: str | None = None) -> None:
+def update_user(user_id: int, email: str, full_name: str, role_id: int, new_password: str | None = None) -> None:
     init_auth_db()
     with get_connection() as connection:
         user = connection.execute(
-            "SELECT id FROM users WHERE id = ?",
+            "SELECT id, cloud_auth_id FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
         if user is None:
             raise ValueError("User not found.")
-
-        duplicate = connection.execute(
-            "SELECT id FROM users WHERE username = ? AND id <> ?",
-            (username, user_id),
-        ).fetchone()
-        if duplicate is not None:
-            raise ValueError("That username is already in use.")
-
-        if new_password:
+        cloud_auth_id = str(user["cloud_auth_id"] or "")
+        if not cloud_auth_id:
             connection.execute(
-                "UPDATE users SET username = ?, password_hash = ?, full_name = ?, role_id = ? WHERE id = ?",
-                (username, hash_password(new_password), full_name, role_id, user_id),
+                "UPDATE users SET username = ?, email = ?, full_name = ?, role_id = ? WHERE id = ?",
+                (email, email, full_name, role_id, user_id),
             )
-        else:
-            connection.execute(
-                "UPDATE users SET username = ?, full_name = ?, role_id = ? WHERE id = ?",
-                (username, full_name, role_id, user_id),
-            )
-        connection.commit()
+            connection.commit()
+            return
+
+    role_name = role_name_for_id(role_id)
+    sync_profile_to_local(
+        cloud_auth.admin_update_user(
+            cloud_auth_id,
+            email,
+            full_name,
+            role_name,
+            password=new_password,
+            active=True,
+        )
+    )
 
 
 def delete_user(user_id: int, current_user_id: int | None = None) -> None:
@@ -435,7 +796,7 @@ def delete_user(user_id: int, current_user_id: int | None = None) -> None:
     with get_connection() as connection:
         user = connection.execute(
             """
-            SELECT u.id, u.active, r.name AS role_name
+            SELECT u.id, u.active, u.cloud_auth_id, r.name AS role_name
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE u.id = ?
@@ -447,27 +808,55 @@ def delete_user(user_id: int, current_user_id: int | None = None) -> None:
         if current_user_id is not None and user_id == current_user_id:
             raise ValueError("You cannot delete the account you are currently using.")
         if user["role_name"] == "Admin" and user["active"]:
+            store_id = current_store_id_from_connection(connection)
             active_admin_count = connection.execute(
                 """
                 SELECT COUNT(*)
                 FROM users u
                 JOIN roles r ON u.role_id = r.id
-                WHERE r.name = 'Admin' AND u.active = 1
-                """
+                WHERE r.name = 'Admin' AND u.active = 1 AND u.store_id = ?
+                """,
+                (store_id,),
             ).fetchone()[0]
             if active_admin_count <= 1:
                 raise ValueError("You cannot delete the last active admin account.")
 
-        connection.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        if user["cloud_auth_id"]:
+            role_id = connection.execute(
+                "SELECT role_id FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()["role_id"]
+            email = connection.execute(
+                "SELECT email, username, full_name FROM users WHERE id = ?",
+                (user_id,),
+            ).fetchone()
+            connection.commit()
+            cloud_auth.admin_update_user(
+                str(user["cloud_auth_id"]),
+                str(email["email"] or email["username"]),
+                str(email["full_name"]),
+                role_name_for_id(int(role_id)),
+                active=False,
+            )
+            with get_connection() as update_connection:
+                update_connection.execute(
+                    "UPDATE users SET active = 0, sync_status = 'synced', last_synced_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (user_id,),
+                )
+                update_connection.commit()
+            return
+
+        connection.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
         connection.commit()
 
 
 def add_register(name: str, location: str) -> int:
     init_auth_db()
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         cursor = connection.execute(
-            "INSERT INTO registers (name, location) VALUES (?, ?)",
-            (name, location),
+            "INSERT INTO registers (name, location, store_id) VALUES (?, ?, ?)",
+            (name, location, store_id),
         )
         connection.commit()
         return int(cursor.lastrowid)
@@ -476,9 +865,10 @@ def add_register(name: str, location: str) -> int:
 def update_register(register_id: int, name: str, location: str) -> None:
     init_auth_db()
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         connection.execute(
-            "UPDATE registers SET name = ?, location = ? WHERE id = ?",
-            (name, location, register_id),
+            "UPDATE registers SET name = ?, location = ? WHERE id = ? AND store_id = ?",
+            (name, location, register_id, store_id),
         )
         connection.commit()
 
@@ -486,32 +876,42 @@ def update_register(register_id: int, name: str, location: str) -> None:
 def delete_register(register_id: int) -> None:
     init_auth_db()
     with get_connection() as connection:
-        connection.execute("UPDATE registers SET active = 0 WHERE id = ?", (register_id,))
+        store_id = current_store_id_from_connection(connection)
+        connection.execute(
+            "UPDATE registers SET active = 0 WHERE id = ? AND store_id = ?",
+            (register_id, store_id),
+        )
         connection.commit()
 
 
 def log_audit(user_id: int, action: str, table_name: str | None = None, record_id: int | None = None, 
              old_values: str | None = None, new_values: str | None = None) -> None:
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         connection.execute(
-            "INSERT INTO audit_logs (user_id, action, table_name, record_id, old_values, new_values) VALUES (?, ?, ?, ?, ?, ?)",
-            (user_id, action, table_name, record_id, old_values, new_values),
+            """
+            INSERT INTO audit_logs (store_id, user_id, action, table_name, record_id, old_values, new_values)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (store_id, user_id, action, table_name, record_id, old_values, new_values),
         )
         connection.commit()
 
 
 def get_audit_logs(limit: int = 100) -> list[sqlite3.Row]:
     with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
             SELECT a.id, a.action, a.table_name, a.record_id, a.old_values, a.new_values, a.created_at,
                    u.username, u.full_name
             FROM audit_logs a
             LEFT JOIN users u ON a.user_id = u.id
+            WHERE a.store_id = ?
             ORDER BY a.id DESC
             LIMIT ?
             """,
-            (limit,),
+            (store_id, limit),
         )
         return cursor.fetchall()
 
@@ -519,7 +919,20 @@ def get_audit_logs(limit: int = 100) -> list[sqlite3.Row]:
 def get_setting(key: str) -> str | None:
     init_auth_db()
     with get_connection() as connection:
-        cursor = connection.execute("SELECT value FROM settings WHERE key = ?", (key,))
+        if key in GLOBAL_SETTING_KEYS:
+            cursor = connection.execute("SELECT value FROM settings WHERE key = ? LIMIT 1", (key,))
+        else:
+            store_id = current_store_id_from_connection(connection)
+            cursor = connection.execute(
+                """
+                SELECT value
+                FROM settings
+                WHERE key = ? AND (store_id = ? OR store_id IS NULL)
+                ORDER BY CASE WHEN store_id = ? THEN 0 ELSE 1 END
+                LIMIT 1
+                """,
+                (key, store_id, store_id),
+            )
         row = cursor.fetchone()
         return row["value"] if row else None
 
@@ -527,10 +940,29 @@ def get_setting(key: str) -> str | None:
 def set_setting(key: str, value: str) -> None:
     init_auth_db()
     with get_connection() as connection:
-        connection.execute(
-            "INSERT OR REPLACE INTO settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-            (key, value),
-        )
+        store_id = None if key in GLOBAL_SETTING_KEYS else current_store_id_from_connection(connection)
+        existing = connection.execute(
+            """
+            SELECT id
+            FROM settings
+            WHERE key = ? AND (store_id = ? OR (store_id IS NULL AND ? IS NULL))
+            LIMIT 1
+            """,
+            (key, store_id, store_id),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO settings (key, value, store_id, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (key, value, store_id),
+            )
+        else:
+            connection.execute(
+                "UPDATE settings SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (value, int(existing["id"])),
+            )
         connection.commit()
 
 
@@ -538,6 +970,9 @@ def build_user_payload(user: sqlite3.Row) -> dict[str, Any]:
     return {
         "id": user["id"],
         "username": user["username"],
+        "email": user["email"],
+        "cloud_auth_id": user["cloud_auth_id"],
+        "store_id": user["store_id"],
         "full_name": user["full_name"],
         "role_id": user["role_id"],
         "role_name": user["role_name"],
@@ -545,18 +980,53 @@ def build_user_payload(user: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def save_session(user_id: int) -> None:
+def current_session_supabase_url() -> str | None:
+    try:
+        return get_supabase_settings().url
+    except SupabaseConfigError:
+        return None
+
+
+def save_session(user_id: int, cloud_auth_id: str | None = None, store_id: str | None = None) -> None:
     set_setting("session_user_id", str(user_id))
+    if cloud_auth_id:
+        set_setting("session_cloud_auth_id", cloud_auth_id)
+    supabase_url = current_session_supabase_url()
+    if supabase_url:
+        set_setting("session_supabase_url", supabase_url)
+    if store_id:
+        set_setting("current_store_id", store_id)
 
 
-def clear_session() -> None:
+def clear_session(sign_out_cloud: bool = True) -> None:
     init_auth_db()
     with get_connection() as connection:
-        connection.execute("DELETE FROM settings WHERE key = 'session_user_id'")
+        connection.execute(
+            """
+            DELETE FROM settings
+            WHERE key IN (
+                'session_user_id',
+                'session_cloud_auth_id',
+                'session_supabase_url',
+                'current_store_id'
+            )
+            """
+        )
         connection.commit()
+    if sign_out_cloud:
+        try:
+            cloud_auth.sign_out()
+        except Exception:
+            pass
 
 
 def get_persisted_user() -> dict[str, Any] | None:
+    supabase_url = current_session_supabase_url()
+    session_supabase_url = get_setting("session_supabase_url")
+    if supabase_url and session_supabase_url != supabase_url:
+        clear_session(sign_out_cloud=False)
+        return None
+
     user_id_text = get_setting("session_user_id")
     if not user_id_text:
         return None
@@ -793,7 +1263,7 @@ class LoginWindow(QDialog):
         username_separator.setFixedWidth(1)
         self.username_input = QLineEdit()
         self.username_input.setObjectName("cardInput")
-        self.username_input.setPlaceholderText("Username")
+        self.username_input.setPlaceholderText("Email")
         username_layout.addWidget(username_icon)
         username_layout.addWidget(username_separator)
         username_layout.addWidget(self.username_input, 1)
@@ -831,32 +1301,6 @@ class LoginWindow(QDialog):
 
         card_layout.addWidget(username_row)
         card_layout.addWidget(password_row)
-        role_row = QFrame()
-        role_row.setObjectName("inputRow")
-        role_row.setFixedHeight(48)
-        role_layout = QHBoxLayout(role_row)
-        role_layout.setContentsMargins(14, 0, 14, 0)
-        role_layout.setSpacing(10)
-        role_icon = self.create_inline_icon_label("role")
-        role_separator = QFrame()
-        role_separator.setObjectName("iconSeparator")
-        role_separator.setFixedWidth(1)
-        self.role_combo = RoleComboBox()
-        self.role_combo.setObjectName("roleCombo")
-        self.role_combo.setMinimumHeight(34)
-        role_popup = QListView()
-        role_popup.setObjectName("rolePopupView")
-        role_popup.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        role_popup.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        role_popup.setSpacing(0)
-        role_popup.setUniformItemSizes(True)
-        self.role_combo.setView(role_popup)
-        self.load_roles()
-        self.configure_role_popup()
-        role_layout.addWidget(role_icon)
-        role_layout.addWidget(role_separator)
-        role_layout.addWidget(self.role_combo, 1)
-        card_layout.addWidget(role_row)
         card_layout.addSpacing(4)
 
         remember_layout = QHBoxLayout()
@@ -880,6 +1324,13 @@ class LoginWindow(QDialog):
         self.login_button.clicked.connect(self.handle_login)
         card_layout.addSpacing(14)
         card_layout.addWidget(self.login_button)
+
+        self.register_button = QPushButton("Register store")
+        IconManager.apply_button(self.register_button, "add", IconManager.DARK)
+        self.register_button.setObjectName("registerButton")
+        self.register_button.setMinimumHeight(40)
+        self.register_button.clicked.connect(self.open_register_dialog)
+        card_layout.addWidget(self.register_button)
 
         self.error_label = QLabel("")
         self.error_label.setObjectName("errorLabel")
@@ -912,42 +1363,124 @@ class LoginWindow(QDialog):
         return label
 
     def handle_login(self) -> None:
-        username = self.username_input.text().strip()
+        email = self.username_input.text().strip()
         password = self.password_input.text()
-        selected_role = self.role_combo.currentText()
         
-        if not username or not password:
-            self.error_label.setText("Please enter username and password")
-            return
-        
-        user = get_user_by_username(username)
-        
-        if user is None:
-            self.error_label.setText("Invalid username or password")
-            self.password_input.clear()
-            return
-        
-        if not verify_password(password, user["password_hash"]):
-            self.error_label.setText("Invalid username or password")
-            self.password_input.clear()
+        if not email or not password:
+            self.error_label.setText("Please enter email and password")
             return
 
-        if selected_role and user["role_name"] != selected_role:
-            self.error_label.setText(f"This account is not assigned to {selected_role}")
+        try:
+            self.current_user = login_with_supabase(email, password)
+        except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
+            self.error_label.setText(str(error))
             self.password_input.clear()
             return
-        
-        self.current_user = build_user_payload(user)
 
         remember_login = self.remember_checkbox.isChecked()
         set_setting("remember_login", "true" if remember_login else "false")
         if remember_login:
-            save_session(int(user["id"]))
+            save_session(
+                int(self.current_user["id"]),
+                str(self.current_user.get("cloud_auth_id") or ""),
+                str(self.current_user.get("store_id") or ""),
+            )
         else:
-            clear_session()
+            clear_session(sign_out_cloud=False)
         
-        log_audit(user["id"], "LOGIN")
+        log_audit(int(self.current_user["id"]), "LOGIN")
         self.accept()
+
+    def open_register_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Register Store")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(420)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(14)
+
+        title = IconManager.label("Register Store", "add", "loginTitle", icon_size=20)
+        layout.addWidget(title)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(12)
+
+        store_input = QLineEdit()
+        store_input.setPlaceholderText("Store name")
+        full_name_input = QLineEdit()
+        full_name_input.setPlaceholderText("Owner full name")
+        email_input = QLineEdit()
+        email_input.setPlaceholderText("Email")
+        password_input = QLineEdit()
+        password_input.setPlaceholderText("Password")
+        password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        confirm_input = QLineEdit()
+        confirm_input.setPlaceholderText("Confirm password")
+        confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        form.addRow("Store", store_input)
+        form.addRow("Owner", full_name_input)
+        form.addRow("Email", email_input)
+        form.addRow("Password", password_input)
+        form.addRow("Confirm", confirm_input)
+        layout.addLayout(form)
+
+        error_label = QLabel("")
+        error_label.setObjectName("errorLabel")
+        error_label.setWordWrap(True)
+        layout.addWidget(error_label)
+
+        button_layout = QHBoxLayout()
+        button_layout.addStretch(1)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("neutralButton")
+        register_button = QPushButton("Register")
+        register_button.setObjectName("loginButton")
+        button_layout.addWidget(cancel_button)
+        button_layout.addWidget(register_button)
+        layout.addLayout(button_layout)
+
+        def submit_registration() -> None:
+            store_name = store_input.text().strip()
+            full_name = full_name_input.text().strip()
+            email = email_input.text().strip()
+            password = password_input.text()
+            confirm_password = confirm_input.text()
+            if not store_name or not full_name or not email or not password:
+                error_label.setText("Please fill all fields.")
+                return
+            if password != confirm_password:
+                error_label.setText("Passwords do not match.")
+                return
+            if len(password) < 6:
+                error_label.setText("Password must be at least 6 characters.")
+                return
+            try:
+                self.current_user = register_store_owner(store_name, full_name, email, password)
+            except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
+                error_label.setText(str(error))
+                return
+
+            set_setting("remember_login", "true" if self.remember_checkbox.isChecked() else "false")
+            if self.remember_checkbox.isChecked():
+                save_session(
+                    int(self.current_user["id"]),
+                    str(self.current_user.get("cloud_auth_id") or ""),
+                    str(self.current_user.get("store_id") or ""),
+                )
+            else:
+                clear_session(sign_out_cloud=False)
+            log_audit(int(self.current_user["id"]), "REGISTER_STORE")
+            dialog.accept()
+            self.accept()
+
+        cancel_button.clicked.connect(dialog.reject)
+        register_button.clicked.connect(submit_registration)
+        dialog.setStyleSheet(self.styleSheet())
+        dialog.exec()
 
     def toggle_password_visibility(self) -> None:
         if self.password_toggle_button.isChecked():
@@ -1117,6 +1650,19 @@ class LoginWindow(QDialog):
 
             #loginButton:pressed {
                 background: #1157C7;
+            }
+
+            #registerButton {
+                background: #EEF5FF;
+                border: 1px solid #CFE1FF;
+                border-radius: 8px;
+                color: #1D4ED8;
+                font-size: 14px;
+                font-weight: 800;
+            }
+
+            #registerButton:hover {
+                background: #E1EEFF;
             }
 
             #errorLabel {
