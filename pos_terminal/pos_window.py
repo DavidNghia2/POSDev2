@@ -49,7 +49,15 @@ from admin.reports_window import create_reports
 from admin.audit_logs_window import create_audit_logs
 from admin.settings_window import create_settings
 
-from login import add_cash_movement, clear_session, get_setting, has_permission, log_audit, open_cash_shift
+from login import (
+    add_cash_movement,
+    clear_session,
+    get_default_register_id,
+    get_setting,
+    has_permission,
+    log_audit,
+    open_cash_shift,
+)
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.qr_display import qr_focus_pixmap
 from ui.theme import MODERN_WIDGET_STYLESHEET
@@ -190,7 +198,7 @@ class PosMainWindow(QMainWindow):
 
         db.init_db()
         self.cart_items: list[CartItem] = []
-        self.register_id = 1
+        self.register_id = get_default_register_id()
         self.shift_id = open_cash_shift(self.register_id, int(self.user_data.get("id", 0)), 0)
 
         self.search_input: QLineEdit
@@ -208,6 +216,7 @@ class PosMainWindow(QMainWindow):
         self.sidebar_expanded_widgets: list[QWidget] = []
         self.sidebar_toggle_button: QPushButton | None = None
         self.central_container: QWidget | None = None
+        self.sync_button: QPushButton | None = None
         self.logout_button: QPushButton | None = None
         self.logout_requested = False
         self.reset_toast: QLabel | None = None
@@ -329,6 +338,25 @@ class PosMainWindow(QMainWindow):
         self.shared_data_refresh_timer.timeout.connect(self.notify_app_data_changed)
         self.shared_data_refresh_timer.start()
 
+        self.cloud_sync_timer = QTimer(self)
+        self.cloud_sync_timer.setInterval(60000)
+        self.cloud_sync_timer.timeout.connect(self.run_cloud_sync)
+        self.cloud_sync_timer.start()
+
+    def run_cloud_sync(self) -> None:
+        try:
+            db.sync_now()
+        except Exception as error:
+            self.statusBar().showMessage(f"Cloud sync skipped: {error}", 5000)
+            return
+        self.notify_app_data_changed()
+        self.statusBar().showMessage("Cloud sync complete.", 2500)
+
+    def user_can_checkout_offline(self) -> bool:
+        role_name = str(self.user_data.get("role_name") or "")
+        permissions = str(self.user_data.get("permissions") or "")
+        return role_name == "Admin" or permissions == "all"
+
     def reload_data(self) -> None:
         if hasattr(self, "search_input"):
             self.load_product_grid()
@@ -446,22 +474,24 @@ class PosMainWindow(QMainWindow):
     def get_today_summary(self) -> dict[str, float | int]:
         today = datetime.now().strftime("%Y-%m-%d")
         with db.get_connection() as connection:
+            store_id = db.current_store_id_from_connection(connection)
             sales_row = connection.execute(
                 """
                 SELECT COUNT(*) AS count, COALESCE(SUM(total_amount), 0) AS total
                 FROM sales
-                WHERE date(created_at, 'localtime') = date(?) AND status = 'completed'
+                WHERE store_id = ? AND date(created_at, 'localtime') = date(?) AND status = 'completed'
                 """,
-                (today,),
+                (store_id, today),
             ).fetchone()
             items_row = connection.execute(
                 """
                 SELECT COALESCE(SUM(si.qty), 0) AS items
                 FROM sale_items si
                 JOIN sales s ON s.id = si.sale_id
-                WHERE date(s.created_at, 'localtime') = date(?) AND s.status = 'completed'
+                WHERE si.store_id = ? AND s.store_id = ?
+                  AND date(s.created_at, 'localtime') = date(?) AND s.status = 'completed'
                 """,
-                (today,),
+                (store_id, store_id, today),
             ).fetchone()
 
         count = int(sales_row["count"] if sales_row else 0)
@@ -680,6 +710,14 @@ class PosMainWindow(QMainWindow):
         self.switch_page(self.pages.currentIndex())
 
         layout.addStretch(1)
+
+        self.sync_button = QPushButton("Sync Now")
+        self.sync_button.setObjectName("syncButton")
+        self.sync_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.sync_button.setToolTip("Sync Now")
+        IconManager.apply_button(self.sync_button, "refresh", IconManager.LIGHT)
+        self.sync_button.clicked.connect(self.run_cloud_sync)
+        layout.addWidget(self.sync_button)
 
         self.logout_button = QPushButton("Logout")
         self.logout_button.setObjectName("logoutButton")
@@ -1084,9 +1122,8 @@ class PosMainWindow(QMainWindow):
         self.addAction(focus_search_action)
 
     def handle_reset_shortcut(self) -> None:
-        self.notify_app_data_changed()
-        self.statusBar().showMessage("Reset successful", 2500)
-        self.show_reset_toast("Reset successful")
+        self.run_cloud_sync()
+        self.show_reset_toast("Sync complete")
 
     def show_reset_toast(self, message: str) -> None:
         if self.reset_toast is None:
@@ -1373,6 +1410,11 @@ class PosMainWindow(QMainWindow):
             success_message += f"\nChange: {self.format_money(float(payment_result['change_amount']))}"
         else:
             success_message += f"\nMethod: {payment_method}"
+        sync_status = str(payment_result.get("sync_status") or "")
+        if sync_status == "pending_offline":
+            success_message += "\nOffline sale saved. It will sync when the network is back."
+        elif sync_status == "conflict":
+            success_message += "\nSale needs admin review before cloud sync."
 
         QMessageBox.information(
             self,
@@ -1571,7 +1613,7 @@ class PosMainWindow(QMainWindow):
             try:
                 if not self.ensure_cart_in_stock():
                     return
-                sale_id = db.create_sale(
+                checkout_result = db.checkout_sale_cloud_first(
                     total_amount,
                     payment_method,
                     sale_items,
@@ -1582,7 +1624,9 @@ class PosMainWindow(QMainWindow):
                     change_amount=change_amount,
                     note=note_text,
                     payments=payment_rows,
+                    allow_offline=self.user_can_checkout_offline(),
                 )
+                sale_id = int(checkout_result["sale_id"])
                 if payment_method == "Cash":
                     add_cash_movement(
                         self.shift_id,
@@ -1615,6 +1659,7 @@ class PosMainWindow(QMainWindow):
                 "payment_method": payment_method,
                 "note": note_text,
                 "payments": payment_rows,
+                "sync_status": checkout_result.get("sync_status"),
             }
             dialog.accept()
 
@@ -1748,7 +1793,7 @@ class PosMainWindow(QMainWindow):
             try:
                 if not self.ensure_cart_in_stock():
                     return
-                sale_id = db.create_sale(
+                checkout_result = db.checkout_sale_cloud_first(
                     total_amount,
                     "Split",
                     sale_items,
@@ -1759,7 +1804,9 @@ class PosMainWindow(QMainWindow):
                     change_amount=change_amount,
                     note=note_text,
                     payments=payment_rows,
+                    allow_offline=self.user_can_checkout_offline(),
                 )
+                sale_id = int(checkout_result["sale_id"])
                 if cash_amount > 0:
                     add_cash_movement(
                         self.shift_id,
@@ -1785,6 +1832,7 @@ class PosMainWindow(QMainWindow):
                 "payment_method": "Split",
                 "note": note_text,
                 "payments": payment_rows,
+                "sync_status": checkout_result.get("sync_status"),
             }
             dialog.accept()
 
@@ -2208,6 +2256,25 @@ def build_stylesheet() -> str:
     #logoutButton[collapsed="true"] {{
         padding: 12px 0;
         text-align: center;
+    }}
+
+    #syncButton {{
+        background: #2563EB;
+        border: none;
+        border-radius: 8px;
+        color: #FFFFFF;
+        font-size: 14px;
+        font-weight: 700;
+        padding: 12px 14px;
+        text-align: left;
+    }}
+
+    #syncButton:hover {{
+        background: #1D4ED8;
+    }}
+
+    #syncButton:pressed {{
+        background: #1E40AF;
     }}
 
     #logoutButton:hover {{

@@ -21,6 +21,7 @@ from login import (
     get_all_roles,
     get_all_users,
     log_audit,
+    refresh_store_users_from_cloud,
     update_user,
 )
 from ui.dialogs import confirm_delete
@@ -61,6 +62,12 @@ class UserManagementWindow(QWidget):
         
         header_layout.addLayout(title_block)
         header_layout.addStretch()
+
+        refresh_button = QPushButton("Sync Users")
+        IconManager.apply_button(refresh_button, "refresh", IconManager.LIGHT)
+        refresh_button.setObjectName("secondaryButton")
+        refresh_button.clicked.connect(self.refresh_users_from_cloud)
+        header_layout.addWidget(refresh_button)
         
         layout.addLayout(header_layout)
         
@@ -95,11 +102,11 @@ class UserManagementWindow(QWidget):
         form_layout = QVBoxLayout()
         form_layout.setSpacing(12)
         
-        # Username
-        username_label = QLabel("Username")
+        # Email
+        username_label = QLabel("Email")
         username_label.setObjectName("formLabel")
         self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("Enter username")
+        self.username_input.setPlaceholderText("Enter email")
         
         form_layout.addWidget(username_label)
         form_layout.addWidget(self.username_input)
@@ -190,7 +197,7 @@ class UserManagementWindow(QWidget):
         self.users_table = QTableWidget()
         self.users_table.setColumnCount(5)
         self.users_table.setHorizontalHeaderLabels(
-            ["ID", "Username", "Full Name", "Role", "Active"]
+            ["ID", "Email", "Full Name", "Role", "Active"]
         )
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -220,13 +227,17 @@ class UserManagementWindow(QWidget):
         users = get_all_users()
         
         if keyword:
-            users = [u for u in users if keyword.lower() in str(u["username"]).lower() or keyword.lower() in str(u["full_name"]).lower()]
+            users = [
+                u for u in users
+                if keyword.lower() in str(u["email"] or u["username"]).lower()
+                or keyword.lower() in str(u["full_name"]).lower()
+            ]
         
         self.users_table.setRowCount(len(users))
         for row_index, user in enumerate(users):
             values = [
                 str(user["id"]),
-                user["username"] or "",
+                user["email"] or user["username"] or "",
                 user["full_name"] or "",
                 user["role_name"] or "None",
                 "Yes" if user["active"] else "No",
@@ -249,6 +260,15 @@ class UserManagementWindow(QWidget):
         self.load_roles()
         self.load_users()
 
+    def refresh_users_from_cloud(self) -> None:
+        try:
+            refresh_store_users_from_cloud()
+        except Exception as error:
+            QMessageBox.warning(self, "Sync Error", str(error))
+            return
+        self.load_users()
+        QMessageBox.information(self, "Success", "Users synced from Supabase.")
+
     def load_selected_user(self) -> None:
         selected_row = self.users_table.currentRow()
         if selected_row < 0:
@@ -262,19 +282,19 @@ class UserManagementWindow(QWidget):
         user = next((u for u in users if u["id"] == self.selected_user_id), None)
         
         if user:
-            self.username_input.setText(user["username"])
+            self.username_input.setText(user["email"] or user["username"])
             self.fullname_input.setText(user["full_name"])
             self.role_combo.setCurrentText(user["role_name"] or "")
             self.password_input.clear()
             self.password_input.setPlaceholderText("Leave blank to keep current")
 
     def add_user_action(self) -> None:
-        username = self.username_input.text().strip()
+        email = self.username_input.text().strip()
         full_name = self.fullname_input.text().strip()
         password = self.password_input.text()
         role_id = self.role_combo.currentData()
         
-        if not username or not full_name or not password:
+        if not email or not full_name or not password:
             QMessageBox.warning(self, "Validation Error", "Please fill all fields")
             return
         
@@ -283,8 +303,8 @@ class UserManagementWindow(QWidget):
             return
         
         try:
-            user_id = add_user(username, password, full_name, role_id)
-            log_audit(self.current_user["id"], "CREATE_USER", "users", user_id, None, f"username: {username}")
+            user_id = add_user(email, password, full_name, role_id)
+            log_audit(self.current_user["id"], "CREATE_USER", "users", user_id, None, f"email: {email}")
         except Exception as e:
             QMessageBox.warning(self, "Error", str(e))
             return
@@ -299,12 +319,12 @@ class UserManagementWindow(QWidget):
             QMessageBox.warning(self, "Validation Error", "Please select a user to update")
             return
         
-        username = self.username_input.text().strip()
+        email = self.username_input.text().strip()
         full_name = self.fullname_input.text().strip()
         password = self.password_input.text() or None
         role_id = self.role_combo.currentData()
         
-        if not username or not full_name:
+        if not email or not full_name:
             QMessageBox.warning(self, "Validation Error", "Please fill required fields")
             return
         
@@ -313,8 +333,8 @@ class UserManagementWindow(QWidget):
             return
         
         try:
-            update_user(self.selected_user_id, username, full_name, role_id, password)
-            log_audit(self.current_user["id"], "UPDATE_USER", "users", self.selected_user_id, None, f"username: {username}")
+            update_user(self.selected_user_id, email, full_name, role_id, password)
+            log_audit(self.current_user["id"], "UPDATE_USER", "users", self.selected_user_id, None, f"email: {email}")
         except Exception as e:
             QMessageBox.warning(self, "Error", str(e))
             return
@@ -331,7 +351,7 @@ class UserManagementWindow(QWidget):
         
         if not confirm_delete(
             self,
-            "Are you sure you want to permanently delete this user?",
+            "Deactivate this user? Their sales history and audit records will be kept.",
         ):
             return
         
@@ -345,7 +365,7 @@ class UserManagementWindow(QWidget):
         self.clear_form()
         self.load_users()
         self.data_changed.emit()
-        QMessageBox.information(self, "Success", "User permanently deleted successfully")
+        QMessageBox.information(self, "Success", "User deactivated successfully")
 
     def clear_form(self) -> None:
         self.selected_user_id = None
