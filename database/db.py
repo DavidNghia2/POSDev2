@@ -1,9 +1,9 @@
+import os
 import sqlite3
 import uuid
-import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from app_paths import database_path
 from cloud import inventory as cloud_inventory
@@ -114,7 +114,8 @@ def rebuild_products_for_store_scoped_uniques(connection: sqlite3.Connection) ->
             storage_path TEXT,
             image_url TEXT,
             sync_status TEXT DEFAULT 'local',
-            last_synced_at TEXT
+            last_synced_at TEXT,
+            cloud_updated_at TEXT
         )
         """
     )
@@ -123,7 +124,7 @@ def rebuild_products_for_store_scoped_uniques(connection: sqlite3.Connection) ->
         INSERT INTO products (
             id, store_id, cloud_id, barcode, sku, name, price, category, stock_qty,
             requires_weight, active, updated_at, image_path, storage_path, image_url,
-            sync_status, last_synced_at
+            sync_status, last_synced_at, cloud_updated_at
         )
         SELECT
             id,
@@ -142,7 +143,8 @@ def rebuild_products_for_store_scoped_uniques(connection: sqlite3.Connection) ->
             NULL,
             NULL,
             COALESCE(sync_status, 'local'),
-            last_synced_at
+            last_synced_at,
+            NULL
         FROM products_store_scope_migration
         """,
         (DEFAULT_LOCAL_STORE_ID,),
@@ -218,7 +220,8 @@ def init_db() -> None:
                 storage_path TEXT,
                 image_url TEXT,
                 sync_status TEXT DEFAULT 'local',
-                last_synced_at TEXT
+                last_synced_at TEXT,
+                cloud_updated_at TEXT
             )
             """
         )
@@ -313,6 +316,7 @@ def init_db() -> None:
         add_column_if_missing(connection, "products", "cloud_id", "cloud_id TEXT")
         add_column_if_missing(connection, "products", "sync_status", "sync_status TEXT DEFAULT 'local'")
         add_column_if_missing(connection, "products", "last_synced_at", "last_synced_at TEXT")
+        add_column_if_missing(connection, "products", "cloud_updated_at", "cloud_updated_at TEXT")
         add_column_if_missing(connection, "product_barcodes", "store_id", "store_id TEXT")
         rebuild_store_scoped_catalog_tables(connection)
         add_column_if_missing(connection, "sales", "user_id", "user_id INTEGER")
@@ -1194,6 +1198,62 @@ def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
 
+def _mapping_value(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _payload_record(payload: Any) -> dict[str, Any]:
+    data = _mapping_value(payload, "data") or payload
+    record = _mapping_value(data, "record")
+    return record if isinstance(record, dict) else {}
+
+
+def _cloud_timestamp_key(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return text
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def should_ignore_product_realtime_event(payload: Any) -> bool:
+    record = _payload_record(payload)
+    store_id = str(record.get("store_id") or "")
+    cloud_id = str(record.get("id") or "")
+    cloud_updated_at = str(record.get("updated_at") or "")
+    if not store_id or not cloud_id or not cloud_updated_at:
+        return False
+
+    with get_connection() as connection:
+        current_store_id = current_store_id_from_connection(connection)
+        if store_id != current_store_id:
+            return True
+        row = connection.execute(
+            """
+            SELECT sync_status, cloud_updated_at
+            FROM products
+            WHERE store_id = ? AND cloud_id = ?
+            LIMIT 1
+            """,
+            (store_id, cloud_id),
+        ).fetchone()
+
+    if row is None or str(row["sync_status"] or "") != "synced":
+        return False
+    local_cloud_updated_at = str(row["cloud_updated_at"] or "")
+    if not local_cloud_updated_at:
+        return False
+    return _cloud_timestamp_key(local_cloud_updated_at) >= _cloud_timestamp_key(cloud_updated_at)
+
+
 def _product_sync_row(connection: sqlite3.Connection, product_id: int) -> sqlite3.Row | None:
     return connection.execute(
         """
@@ -1214,6 +1274,7 @@ def _set_product_sync_state(
     cloud_id: str | None = None,
     storage_path: str | None = None,
     image_url: str | None = None,
+    cloud_updated_at: str | None = None,
 ) -> None:
     connection.execute(
         """
@@ -1221,11 +1282,12 @@ def _set_product_sync_state(
         SET cloud_id = COALESCE(?, cloud_id),
             storage_path = COALESCE(?, storage_path),
             image_url = COALESCE(?, image_url),
+            cloud_updated_at = COALESCE(?, cloud_updated_at),
             sync_status = ?,
             last_synced_at = CASE WHEN ? = 'synced' THEN CURRENT_TIMESTAMP ELSE last_synced_at END
         WHERE id = ?
         """,
-        (cloud_id, storage_path, image_url, sync_status, sync_status, product_id),
+        (cloud_id, storage_path, image_url, cloud_updated_at, sync_status, sync_status, product_id),
     )
 
 
@@ -1270,10 +1332,17 @@ def push_product_to_cloud(product_id: int) -> bool:
             barcodes = fetch_product_barcodes(connection, product_id)
 
         if not active:
+            cloud_row: dict[str, Any] | None = None
             if cloud_id:
-                cloud_products.set_product_active(cloud_id, False)
+                cloud_row = cloud_products.set_product_active(cloud_id, False)
             with get_connection() as connection:
-                _set_product_sync_state(connection, product_id, "synced", cloud_id=cloud_id)
+                _set_product_sync_state(
+                    connection,
+                    product_id,
+                    "synced",
+                    cloud_id=cloud_id,
+                    cloud_updated_at=str((cloud_row or {}).get("updated_at") or "") or None,
+                )
                 connection.commit()
             return True
 
@@ -1323,6 +1392,7 @@ def push_product_to_cloud(product_id: int) -> bool:
                 cloud_id=cloud_id,
                 storage_path=storage_path,
                 image_url=image_url,
+                cloud_updated_at=str(cloud_row.get("updated_at") or "") or None,
             )
             connection.commit()
         return True
@@ -1379,6 +1449,7 @@ def _upsert_cloud_product_local(
     image_path = str(existing["image_path"] or "") if existing is not None else ""
     image_url = str(product.get("image_url") or "")
     storage_path = str(product.get("storage_path") or "")
+    cloud_updated_at = str(product.get("updated_at") or "") or None
     if image_url:
         try:
             image_path = cloud_products.download_product_image(store_id, cloud_id, image_url, storage_path)
@@ -1403,6 +1474,7 @@ def _upsert_cloud_product_local(
         image_path or None,
         storage_path or None,
         image_url or None,
+        cloud_updated_at,
         "synced",
     )
 
@@ -1412,9 +1484,9 @@ def _upsert_cloud_product_local(
             INSERT INTO products (
                 store_id, cloud_id, barcode, sku, name, price, category, stock_qty,
                 requires_weight, active, image_path, storage_path, image_url,
-                sync_status, last_synced_at
+                cloud_updated_at, sync_status, last_synced_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             values,
         )
@@ -1426,7 +1498,7 @@ def _upsert_cloud_product_local(
             UPDATE products
             SET store_id = ?, cloud_id = ?, barcode = ?, sku = ?, name = ?, price = ?,
                 category = ?, stock_qty = ?, requires_weight = ?, active = ?,
-                image_path = ?, storage_path = ?, image_url = ?, sync_status = ?,
+                image_path = ?, storage_path = ?, image_url = ?, cloud_updated_at = ?, sync_status = ?,
                 last_synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
@@ -2202,6 +2274,18 @@ def sync_now() -> None:
     retry_pending_sale_sync()
     pull_products_from_cloud()
     pull_recent_sales_from_cloud()
+
+
+def sync_realtime_update(kinds: set[str]) -> None:
+    normalized = {str(kind).strip().lower() for kind in kinds if str(kind).strip()}
+    if not normalized:
+        return
+    if "all" in normalized:
+        normalized = {"products", "sales"}
+    if "products" in normalized:
+        pull_products_from_cloud()
+    if "sales" in normalized:
+        pull_recent_sales_from_cloud(limit=50)
 
 
 def sync_on_login() -> None:

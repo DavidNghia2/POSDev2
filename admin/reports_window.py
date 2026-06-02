@@ -33,10 +33,10 @@ def get_sales_report(start_date: str, end_date: str) -> list:
         cursor = connection.execute(
             """
             SELECT s.id, s.total_amount, s.payment_method, s.created_at,
-                   u.username as cashier_name
+                   COALESCE(u.full_name, u.username) as cashier_name
             FROM sales s
-            LEFT JOIN users u ON s.user_id = u.id
-            WHERE s.store_id = ? AND s.created_at >= ? AND s.created_at <= ?
+            LEFT JOIN users u ON s.user_id = u.id AND u.store_id = s.store_id
+            WHERE s.store_id = ? AND datetime(s.created_at) >= datetime(?) AND datetime(s.created_at) <= datetime(?)
               AND s.status = 'completed'
             ORDER BY s.id DESC
             """,
@@ -50,14 +50,14 @@ def get_sales_by_cashier(start_date: str, end_date: str) -> list:
         store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
-            SELECT u.username as cashier_name, 
+            SELECT COALESCE(u.full_name, u.username, 'N/A') as cashier_name,
                    COUNT(s.id) as transaction_count,
                    COALESCE(SUM(s.total_amount), 0) as total_sales
             FROM sales s
-            LEFT JOIN users u ON s.user_id = u.id
-            WHERE s.store_id = ? AND s.created_at >= ? AND s.created_at <= ?
+            LEFT JOIN users u ON s.user_id = u.id AND u.store_id = s.store_id
+            WHERE s.store_id = ? AND datetime(s.created_at) >= datetime(?) AND datetime(s.created_at) <= datetime(?)
               AND s.status = 'completed'
-            GROUP BY s.user_id
+            GROUP BY s.user_id, cashier_name
             ORDER BY total_sales DESC
             """,
             (store_id, start_date, end_date),
@@ -74,7 +74,7 @@ def get_sales_by_payment(start_date: str, end_date: str) -> list:
                    COUNT(*) as transaction_count,
                    COALESCE(SUM(total_amount), 0) as total_sales
             FROM sales
-            WHERE store_id = ? AND created_at >= ? AND created_at <= ?
+            WHERE store_id = ? AND datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)
               AND status = 'completed'
             GROUP BY payment_method
             ORDER BY total_sales DESC
@@ -94,7 +94,8 @@ def get_sales_by_product(start_date: str, end_date: str) -> list:
                    SUM(si.subtotal) as total_sales
             FROM sale_items si
             WHERE si.store_id = ? AND si.sale_id IN (
-                SELECT id FROM sales WHERE store_id = ? AND created_at >= ? AND created_at <= ?
+                SELECT id FROM sales
+                WHERE store_id = ? AND datetime(created_at) >= datetime(?) AND datetime(created_at) <= datetime(?)
                 AND status = 'completed'
             )
             GROUP BY si.barcode, si.name
@@ -112,10 +113,10 @@ def get_voided_sales_report(start_date: str, end_date: str) -> list:
         cursor = connection.execute(
             """
             SELECT s.id, s.total_amount, s.payment_method, s.created_at,
-                   u.username as cashier_name
+                   COALESCE(u.full_name, u.username) as cashier_name
             FROM sales s
-            LEFT JOIN users u ON s.user_id = u.id
-            WHERE s.store_id = ? AND s.created_at >= ? AND s.created_at <= ?
+            LEFT JOIN users u ON s.user_id = u.id AND u.store_id = s.store_id
+            WHERE s.store_id = ? AND datetime(s.created_at) >= datetime(?) AND datetime(s.created_at) <= datetime(?)
               AND s.status = 'voided'
             ORDER BY s.id DESC
             """,
@@ -129,13 +130,13 @@ def get_shift_summary(start_date: str, end_date: str) -> list:
         store_id = db.current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
-            SELECT cs.id, r.name as register_name, u.username as cashier_name,
+            SELECT cs.id, r.name as register_name, COALESCE(u.full_name, u.username) as cashier_name,
                    cs.opened_at, cs.closed_at, cs.opening_balance,
                    cs.expected_balance, cs.closing_balance, cs.status
             FROM cash_shifts cs
-            LEFT JOIN registers r ON cs.register_id = r.id
-            LEFT JOIN users u ON cs.user_id = u.id
-            WHERE cs.store_id = ? AND cs.opened_at >= ? AND cs.opened_at <= ?
+            LEFT JOIN registers r ON cs.register_id = r.id AND r.store_id = cs.store_id
+            LEFT JOIN users u ON cs.user_id = u.id AND u.store_id = cs.store_id
+            WHERE cs.store_id = ? AND datetime(cs.opened_at) >= datetime(?) AND datetime(cs.opened_at) <= datetime(?)
             ORDER BY cs.id DESC
             """,
             (store_id, start_date, end_date),
@@ -299,7 +300,7 @@ class ReportsWindow(QWidget):
 
     def load_report(self) -> None:
         report_type = self.report_type_combo.currentText()
-        start_date = self.date_from.date().toString("yyyy-MM-dd")
+        start_date = self.date_from.date().toString("yyyy-MM-dd") + " 00:00:00"
         end_date = self.date_to.date().toString("yyyy-MM-dd") + " 23:59:59"
         
         if report_type == "Daily Sales":
