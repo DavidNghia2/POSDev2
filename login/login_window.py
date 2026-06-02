@@ -1,5 +1,6 @@
 import sqlite3
 import hashlib
+from datetime import datetime, timezone
 from typing import Any
 
 from PyQt6.QtCore import QEvent, QRectF, Qt
@@ -34,6 +35,9 @@ GLOBAL_SETTING_KEYS = {
     "session_user_id",
     "session_cloud_auth_id",
     "session_supabase_url",
+    "session_access_token",
+    "session_refresh_token",
+    "session_expires_at",
     "current_store_id",
     "remember_login",
 }
@@ -203,6 +207,7 @@ def init_auth_db() -> None:
         add_column_if_missing(connection, "users", "store_id", "store_id TEXT")
         add_column_if_missing(connection, "users", "sync_status", "sync_status TEXT DEFAULT 'local'")
         add_column_if_missing(connection, "users", "last_synced_at", "last_synced_at TEXT")
+        add_column_if_missing(connection, "users", "deleted_at", "deleted_at TEXT")
         add_column_if_missing(connection, "registers", "store_id", "store_id TEXT")
         add_column_if_missing(connection, "registers", "cloud_id", "cloud_id TEXT")
         add_column_if_missing(connection, "registers", "sync_status", "sync_status TEXT DEFAULT 'local'")
@@ -358,6 +363,7 @@ def sync_profile_to_local(profile: dict[str, Any], update_current_store: bool = 
     role_name = str(profile.get("role_name") or "Cashier")
     permissions = str(profile.get("permissions") or "")
     active = 1 if bool(profile.get("active", True)) else 0
+    deleted_at = str(profile.get("deleted_at") or "").strip() or None
     if not email:
         raise ValueError("Supabase profile is missing an email address.")
 
@@ -402,11 +408,11 @@ def sync_profile_to_local(profile: dict[str, Any], update_current_store: bool = 
                 """
                 INSERT INTO users (
                     username, email, password_hash, full_name, role_id, active,
-                    cloud_auth_id, store_id, sync_status, last_synced_at
+                    cloud_auth_id, store_id, sync_status, last_synced_at, deleted_at
                 )
-                VALUES (?, ?, 'supabase$managed', ?, ?, ?, ?, ?, 'synced', CURRENT_TIMESTAMP)
+                VALUES (?, ?, 'supabase$managed', ?, ?, ?, ?, ?, 'synced', CURRENT_TIMESTAMP, ?)
                 """,
-                (email, email, full_name, role_id, active, cloud_auth_id or None, store_id),
+                (email, email, full_name, role_id, active, cloud_auth_id or None, store_id, deleted_at),
             )
             user_id = int(cursor.lastrowid)
         else:
@@ -416,10 +422,11 @@ def sync_profile_to_local(profile: dict[str, Any], update_current_store: bool = 
                 UPDATE users
                 SET username = ?, email = ?, full_name = ?, role_id = ?, active = ?,
                     cloud_auth_id = COALESCE(?, cloud_auth_id), store_id = ?,
-                    sync_status = 'synced', last_synced_at = CURRENT_TIMESTAMP
+                    sync_status = 'synced', last_synced_at = CURRENT_TIMESTAMP,
+                    deleted_at = ?
                 WHERE id = ?
                 """,
-                (email, email, full_name, role_id, active, cloud_auth_id or None, store_id, user_id),
+                (email, email, full_name, role_id, active, cloud_auth_id or None, store_id, deleted_at, user_id),
             )
 
         if update_current_store:
@@ -468,15 +475,11 @@ def sync_store_data_from_cloud() -> None:
 
 
 def login_with_supabase(email: str, password: str) -> dict[str, Any]:
-    user = sync_profile_to_local(cloud_auth.login(email, password))
-    sync_store_data_from_cloud()
-    return user
+    return sync_profile_to_local(cloud_auth.login(email, password))
 
 
 def register_store_owner(store_name: str, full_name: str, email: str, password: str) -> dict[str, Any]:
-    user = sync_profile_to_local(cloud_auth.register_store_owner(store_name, full_name, email, password))
-    sync_store_data_from_cloud()
-    return user
+    return sync_profile_to_local(cloud_auth.register_store_owner(store_name, full_name, email, password))
 
 
 def refresh_store_users_from_cloud() -> None:
@@ -494,12 +497,12 @@ def get_all_users() -> list[sqlite3.Row]:
         cursor = connection.execute(
             """
             SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id,
-                   s.name as store_name, u.full_name, r.name as role_name,
-                   u.active, u.created_at, u.last_synced_at
+                   s.name as store_name, u.full_name, u.role_id, r.name as role_name,
+                   u.active, u.created_at, u.last_synced_at, u.deleted_at
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             LEFT JOIN stores s ON s.id = u.store_id
-            WHERE u.store_id = ?
+            WHERE u.store_id = ? AND (u.deleted_at IS NULL OR TRIM(u.deleted_at) = '')
             ORDER BY u.id DESC
             """,
             (store_id,),
@@ -518,6 +521,7 @@ def get_user_by_username(username: str) -> sqlite3.Row | None:
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE (u.username = ? OR u.email = ?) AND u.store_id = ? AND u.active = 1
+              AND (u.deleted_at IS NULL OR TRIM(u.deleted_at) = '')
             """,
             (username, username, store_id),
         )
@@ -534,6 +538,7 @@ def get_user_by_id(user_id: int) -> sqlite3.Row | None:
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE u.id = ? AND u.active = 1
+              AND (u.deleted_at IS NULL OR TRIM(u.deleted_at) = '')
             """,
             (user_id,),
         )
@@ -550,6 +555,7 @@ def get_user_by_cloud_auth_id(cloud_auth_id: str) -> sqlite3.Row | None:
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE u.cloud_auth_id = ? AND u.active = 1
+              AND (u.deleted_at IS NULL OR TRIM(u.deleted_at) = '')
             """,
             (cloud_auth_id,),
         )
@@ -773,7 +779,7 @@ def update_user(user_id: int, email: str, full_name: str, role_id: int, new_pass
     init_auth_db()
     with get_connection() as connection:
         user = connection.execute(
-            "SELECT id, cloud_auth_id FROM users WHERE id = ?",
+            "SELECT id, cloud_auth_id, active, deleted_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
         if user is None:
@@ -788,6 +794,8 @@ def update_user(user_id: int, email: str, full_name: str, role_id: int, new_pass
             return
 
     role_name = role_name_for_id(role_id)
+    active = bool(user["active"])
+    deleted_at = str(user["deleted_at"] or "") or None
     sync_profile_to_local(
         cloud_auth.admin_update_user(
             cloud_auth_id,
@@ -795,17 +803,68 @@ def update_user(user_id: int, email: str, full_name: str, role_id: int, new_pass
             full_name,
             role_name,
             password=new_password,
-            active=True,
+            active=active,
+            deleted_at=deleted_at,
         )
     )
 
 
-def delete_user(user_id: int, current_user_id: int | None = None) -> None:
+def set_user_active(user_id: int, active: bool, current_user_id: int | None = None) -> None:
     init_auth_db()
     with get_connection() as connection:
         user = connection.execute(
             """
-            SELECT u.id, u.active, u.cloud_auth_id, r.name AS role_name
+            SELECT u.id, u.active, u.cloud_auth_id, u.email, u.username, u.full_name,
+                   u.role_id, u.store_id, r.name AS role_name
+            FROM users u
+            LEFT JOIN roles r ON u.role_id = r.id
+            WHERE u.id = ?
+            """,
+            (user_id,),
+        ).fetchone()
+        if user is None:
+            raise ValueError("User not found.")
+        if current_user_id is not None and user_id == current_user_id and not active:
+            raise ValueError("You cannot deactivate the account you are currently using.")
+        if user["role_name"] == "Admin" and user["active"] and not active:
+            store_id = current_store_id_from_connection(connection)
+            active_admin_count = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM users u
+                JOIN roles r ON u.role_id = r.id
+                WHERE r.name = 'Admin' AND u.active = 1 AND u.store_id = ?
+                """,
+                (store_id,),
+            ).fetchone()[0]
+            if active_admin_count <= 1:
+                raise ValueError("You cannot deactivate the last active admin account.")
+
+        if user["cloud_auth_id"]:
+            connection.commit()
+            profile = cloud_auth.admin_update_user(
+                str(user["cloud_auth_id"]),
+                str(user["email"] or user["username"]),
+                str(user["full_name"]),
+                role_name_for_id(int(user["role_id"])),
+                active=active,
+                deleted_at=None,
+            )
+            sync_profile_to_local(profile, update_current_store=False)
+            return
+
+        connection.execute("UPDATE users SET active = ?, deleted_at = NULL WHERE id = ?", (int(active), user_id))
+        connection.commit()
+
+
+def soft_delete_user(user_id: int, current_user_id: int | None = None) -> None:
+    init_auth_db()
+    deleted_at = datetime.now(timezone.utc).isoformat()
+    with get_connection() as connection:
+        user = connection.execute(
+            """
+            SELECT u.id, u.active, u.cloud_auth_id, u.email, u.username, u.full_name,
+                   u.role_id, r.name AS role_name
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
             WHERE u.id = ?
@@ -824,6 +883,7 @@ def delete_user(user_id: int, current_user_id: int | None = None) -> None:
                 FROM users u
                 JOIN roles r ON u.role_id = r.id
                 WHERE r.name = 'Admin' AND u.active = 1 AND u.store_id = ?
+                  AND (u.deleted_at IS NULL OR TRIM(u.deleted_at) = '')
                 """,
                 (store_id,),
             ).fetchone()[0]
@@ -831,32 +891,27 @@ def delete_user(user_id: int, current_user_id: int | None = None) -> None:
                 raise ValueError("You cannot delete the last active admin account.")
 
         if user["cloud_auth_id"]:
-            role_id = connection.execute(
-                "SELECT role_id FROM users WHERE id = ?",
-                (user_id,),
-            ).fetchone()["role_id"]
-            email = connection.execute(
-                "SELECT email, username, full_name FROM users WHERE id = ?",
-                (user_id,),
-            ).fetchone()
             connection.commit()
-            cloud_auth.admin_update_user(
+            profile = cloud_auth.admin_update_user(
                 str(user["cloud_auth_id"]),
-                str(email["email"] or email["username"]),
-                str(email["full_name"]),
-                role_name_for_id(int(role_id)),
+                str(user["email"] or user["username"]),
+                str(user["full_name"]),
+                role_name_for_id(int(user["role_id"])),
                 active=False,
+                deleted_at=deleted_at,
             )
-            with get_connection() as update_connection:
-                update_connection.execute(
-                    "UPDATE users SET active = 0, sync_status = 'synced', last_synced_at = CURRENT_TIMESTAMP WHERE id = ?",
-                    (user_id,),
-                )
-                update_connection.commit()
+            sync_profile_to_local(profile, update_current_store=False)
             return
 
-        connection.execute("UPDATE users SET active = 0 WHERE id = ?", (user_id,))
+        connection.execute(
+            "UPDATE users SET active = 0, deleted_at = ?, sync_status = 'synced', last_synced_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (deleted_at, user_id),
+        )
         connection.commit()
+
+
+def delete_user(user_id: int, current_user_id: int | None = None) -> None:
+    soft_delete_user(user_id, current_user_id)
 
 
 def add_register(name: str, location: str) -> int:
@@ -1003,6 +1058,13 @@ def save_session(user_id: int, cloud_auth_id: str | None = None, store_id: str |
     supabase_url = current_session_supabase_url()
     if supabase_url:
         set_setting("session_supabase_url", supabase_url)
+    tokens = cloud_auth.current_session_tokens()
+    if tokens.get("access_token"):
+        set_setting("session_access_token", tokens["access_token"])
+    if tokens.get("refresh_token"):
+        set_setting("session_refresh_token", tokens["refresh_token"])
+    if tokens.get("expires_at"):
+        set_setting("session_expires_at", tokens["expires_at"])
     if store_id:
         set_setting("current_store_id", store_id)
 
@@ -1017,6 +1079,9 @@ def clear_session(sign_out_cloud: bool = True) -> None:
                 'session_user_id',
                 'session_cloud_auth_id',
                 'session_supabase_url',
+                'session_access_token',
+                'session_refresh_token',
+                'session_expires_at',
                 'current_store_id'
             )
             """
@@ -1050,6 +1115,30 @@ def get_persisted_user() -> dict[str, Any] | None:
     if user is None:
         clear_session()
         return None
+    cloud_auth_id = str(user["cloud_auth_id"] or "")
+    store_id = str(user["store_id"] or "")
+    if cloud_auth_id and store_id != DEFAULT_LOCAL_STORE_ID:
+        restored_auth_id = cloud_auth.current_auth_user_id()
+        if restored_auth_id != cloud_auth_id:
+            try:
+                restored_auth_id = cloud_auth.restore_session(
+                    get_setting("session_access_token"),
+                    get_setting("session_refresh_token"),
+                )
+            except Exception:
+                clear_session(sign_out_cloud=True)
+                return None
+        if restored_auth_id != cloud_auth_id:
+            clear_session(sign_out_cloud=True)
+            return None
+        tokens = cloud_auth.current_session_tokens()
+        if tokens.get("access_token"):
+            set_setting("session_access_token", tokens["access_token"])
+        if tokens.get("refresh_token"):
+            set_setting("session_refresh_token", tokens["refresh_token"])
+        if tokens.get("expires_at"):
+            set_setting("session_expires_at", tokens["expires_at"])
+        set_setting("current_store_id", store_id)
     return build_user_payload(user)
 
 

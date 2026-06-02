@@ -75,7 +75,7 @@ serve(async (req) => {
         active: true,
         updated_at: new Date().toISOString(),
       })
-      .select("auth_user_id,store_id,email,full_name,role_id,active,roles(id,name,permissions),stores(id,name)")
+      .select("auth_user_id,store_id,email,full_name,role_id,active,deleted_at,roles(id,name,permissions),stores(id,name)")
       .single();
     if (upsertError) {
       throw upsertError;

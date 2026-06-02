@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from textwrap import wrap
+from uuid import uuid4
 
 from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QShortcut
@@ -39,6 +40,7 @@ from ui.currency import (
     set_money_table_item,
 )
 from ui.icon_manager import IconManager
+from ui.loading import BackgroundTaskRunner, BlockingTaskRunner, CHECKOUT_TIMEOUT_MS
 
 # Admin imports
 from admin.admin_dashboard_window import create_admin_dashboard
@@ -223,6 +225,7 @@ class PosMainWindow(QMainWindow):
         self.realtime_worker = None
         self.background_sync_timer: QTimer | None = None
         self.background_sync_pending_kinds: set[str] = set()
+        self.background_task_runner = BackgroundTaskRunner(self)
 
         self.build_ui()
         self.connect_global_refresh()
@@ -361,6 +364,7 @@ class PosMainWindow(QMainWindow):
         self.background_sync_timer.setInterval(1500)
         self.background_sync_timer.timeout.connect(self.run_background_sync)
         self.start_realtime_sync()
+        self.request_background_sync("startup", {"full", "users"}, delay_ms=0)
 
     def request_background_sync(
         self,
@@ -401,12 +405,16 @@ class PosMainWindow(QMainWindow):
         if self.cloud_sync_running:
             if self.background_sync_timer is not None:
                 self.background_sync_timer.start(1000)
+            self.statusBar().showMessage("Sync already running; queued latest changes.", 1800)
             return
 
         kinds = set(self.background_sync_pending_kinds)
         self.background_sync_pending_kinds.clear()
         self.cloud_sync_running = True
-        try:
+        kinds_label = ", ".join(sorted(kinds))
+        self.statusBar().showMessage(f"Syncing {kinds_label}...")
+
+        def sync_task() -> None:
             store_id = db.get_current_store_id()
             if "users" in kinds and db.cloud_sync_enabled_for_store(store_id):
                 refresh_store_users_from_cloud()
@@ -414,17 +422,27 @@ class PosMainWindow(QMainWindow):
                 db.sync_now()
             else:
                 db.sync_realtime_update(kinds & {"products", "sales"})
-        except Exception as error:
+
+        def on_success(_result) -> None:
+            self.cloud_sync_running = False
+            self.statusBar().showMessage("Synced.", 2200)
+            self.notify_app_data_changed()
+            if self.background_sync_pending_kinds and self.background_sync_timer is not None:
+                self.background_sync_timer.start(500)
+
+        def on_error(error: Exception) -> None:
+            self.cloud_sync_running = False
             self.background_sync_pending_kinds.update(kinds)
             if self.background_sync_timer is not None:
                 self.background_sync_timer.start(5000)
             self.statusBar().showMessage(f"Background sync skipped: {error}", 5000)
-            return
-        finally:
+
+        if not self.background_task_runner.start(sync_task, on_success, on_error):
             self.cloud_sync_running = False
-        self.notify_app_data_changed()
-        if self.background_sync_pending_kinds and self.background_sync_timer is not None:
-            self.background_sync_timer.start(500)
+            self.background_sync_pending_kinds.update(kinds)
+            if self.background_sync_timer is not None:
+                self.background_sync_timer.start(1000)
+            self.statusBar().showMessage("Sync queued.", 1800)
 
     def start_realtime_sync(self) -> None:
         store_id = db.get_current_store_id()
@@ -1007,9 +1025,9 @@ class PosMainWindow(QMainWindow):
     def load_product_grid(self) -> None:
         keyword = self.search_input.text().strip()
         products = (
-            db.search_products(keyword, limit=POS_PRODUCT_GRID_LIMIT + 1)
+            db.search_saleable_products(keyword, limit=POS_PRODUCT_GRID_LIMIT + 1)
             if keyword
-            else db.get_all_products(limit=POS_PRODUCT_GRID_LIMIT + 1)
+            else db.get_saleable_products(limit=POS_PRODUCT_GRID_LIMIT + 1)
         )
         has_more_products = len(products) > POS_PRODUCT_GRID_LIMIT
         products = products[:POS_PRODUCT_GRID_LIMIT]
@@ -1413,7 +1431,7 @@ class PosMainWindow(QMainWindow):
         available_items: list[CartItem] = []
         removed_names: list[str] = []
         for item in self.cart_items:
-            if db.get_product_by_id(item.product_id) is None:
+            if db.get_saleable_product_by_id(item.product_id) is None:
                 removed_names.append(item.name)
             else:
                 available_items.append(item)
@@ -1428,7 +1446,7 @@ class PosMainWindow(QMainWindow):
         if len(removed_names) > 3:
             preview += f" and {len(removed_names) - 3} more"
         self.statusBar().showMessage(
-            f"Removed unavailable product(s) from cart: {preview}",
+            f"Removed unavailable or still-syncing product(s) from cart: {preview}",
             6000,
         )
         return removed_names
@@ -1457,7 +1475,7 @@ class PosMainWindow(QMainWindow):
             QMessageBox.warning(
                 self,
                 "Product Unavailable",
-                "One or more products were removed from the cart because they are no longer available.",
+                "One or more products were removed because they are unavailable or still syncing.",
             )
             return False
         for item in self.cart_items:
@@ -1680,6 +1698,8 @@ class PosMainWindow(QMainWindow):
                 amount_tendered_input.setText(f"{total_amount:.2f}")
 
         payment_result: dict[str, object] | None = None
+        checkout_client_uuid = str(uuid4())
+        checkout_runner = BlockingTaskRunner(dialog, timeout_ms=CHECKOUT_TIMEOUT_MS)
 
         def confirm_payment() -> None:
             nonlocal payment_result
@@ -1708,27 +1728,32 @@ class PosMainWindow(QMainWindow):
             note_text = note_input.text().strip()
             payment_rows = [{"method": payment_method, "amount": total_amount}]
 
-            try:
-                if not self.ensure_cart_in_stock():
-                    return
+            if not self.ensure_cart_in_stock():
+                return
+
+            user_id = int(self.user_data.get("id", 0))
+            allow_offline = self.user_can_checkout_offline()
+
+            def checkout_task() -> dict[str, object]:
                 checkout_result = db.checkout_sale_cloud_first(
                     total_amount,
                     payment_method,
                     sale_items,
-                    user_id=int(self.user_data.get("id", 0)),
+                    user_id=user_id,
                     register_id=self.register_id,
                     shift_id=self.shift_id,
                     tendered_amount=tendered_amount,
                     change_amount=change_amount,
                     note=note_text,
                     payments=payment_rows,
-                    allow_offline=self.user_can_checkout_offline(),
+                    allow_offline=allow_offline,
+                    client_uuid=checkout_client_uuid,
                 )
                 sale_id = int(checkout_result["sale_id"])
                 if payment_method == "Cash":
                     add_cash_movement(
                         self.shift_id,
-                        int(self.user_data.get("id", 0)),
+                        user_id,
                         "sale",
                         total_amount,
                         f"Cash sale #{sale_id}",
@@ -1741,25 +1766,42 @@ class PosMainWindow(QMainWindow):
                     None,
                     f"total: {total_amount:.2f}",
                 )
-            except ValueError as error:
-                QMessageBox.warning(dialog, "Inventory Error", str(error))
-                return
-            except Exception as error:
-                QMessageBox.warning(dialog, "Database Error", f"Could not save sale: {error}")
-                return
+                return {"sale_id": sale_id, "sync_status": checkout_result.get("sync_status")}
 
-            payment_result = {
-                "sale_id": sale_id,
-                "sale_items": sale_items,
-                "total_amount": total_amount,
-                "tendered_amount": tendered_amount,
-                "change_amount": change_amount,
-                "payment_method": payment_method,
-                "note": note_text,
-                "payments": payment_rows,
-                "sync_status": checkout_result.get("sync_status"),
-            }
-            dialog.accept()
+            def on_success(result: dict[str, object]) -> None:
+                nonlocal payment_result
+                confirm_button.setEnabled(True)
+                payment_result = {
+                    "sale_id": result["sale_id"],
+                    "sale_items": sale_items,
+                    "total_amount": total_amount,
+                    "tendered_amount": tendered_amount,
+                    "change_amount": change_amount,
+                    "payment_method": payment_method,
+                    "note": note_text,
+                    "payments": payment_rows,
+                    "sync_status": result.get("sync_status"),
+                }
+                dialog.accept()
+
+            def on_error(error: Exception) -> None:
+                confirm_button.setEnabled(True)
+                self.request_background_sync("checkout-recovery", {"full"}, delay_ms=0)
+                QMessageBox.warning(dialog, "Inventory Error", str(error))
+
+            confirm_button.setEnabled(False)
+            if not checkout_runner.start(
+                task=checkout_task,
+                message="Processing payment...",
+                on_success=on_success,
+                on_error=on_error,
+                timeout_ms=CHECKOUT_TIMEOUT_MS,
+                timeout_message=(
+                    "Payment is taking longer than expected. A recovery sync will run; "
+                    "please check sales before trying again."
+                ),
+            ):
+                confirm_button.setEnabled(True)
 
         amount_tendered_input.textChanged.connect(update_change)
         bank_radio.toggled.connect(toggle_bank_transfer_ui)
@@ -1852,6 +1894,8 @@ class PosMainWindow(QMainWindow):
         layout.addLayout(button_layout)
 
         payment_result: dict[str, object] | None = None
+        checkout_client_uuid = str(uuid4())
+        checkout_runner = BlockingTaskRunner(dialog, timeout_ms=CHECKOUT_TIMEOUT_MS)
 
         def confirm_split_payment() -> None:
             nonlocal payment_result
@@ -1888,51 +1932,73 @@ class PosMainWindow(QMainWindow):
             if transfer_amount > 0:
                 payment_rows.append({"method": "Bank Transfer", "amount": transfer_amount})
 
-            try:
-                if not self.ensure_cart_in_stock():
-                    return
+            if not self.ensure_cart_in_stock():
+                return
+
+            user_id = int(self.user_data.get("id", 0))
+            allow_offline = self.user_can_checkout_offline()
+
+            def checkout_task() -> dict[str, object]:
                 checkout_result = db.checkout_sale_cloud_first(
                     total_amount,
                     "Split",
                     sale_items,
-                    user_id=int(self.user_data.get("id", 0)),
+                    user_id=user_id,
                     register_id=self.register_id,
                     shift_id=self.shift_id,
                     tendered_amount=tendered_amount,
                     change_amount=change_amount,
                     note=note_text,
                     payments=payment_rows,
-                    allow_offline=self.user_can_checkout_offline(),
+                    allow_offline=allow_offline,
+                    client_uuid=checkout_client_uuid,
                 )
                 sale_id = int(checkout_result["sale_id"])
                 if cash_amount > 0:
                     add_cash_movement(
                         self.shift_id,
-                        int(self.user_data.get("id", 0)),
+                        user_id,
                         "sale",
                         min(cash_amount, total_amount),
                         f"Split sale #{sale_id}",
                     )
                 log_audit(self.user_data["id"], "CREATE_SALE", "sales", sale_id, None, f"total: {total_amount:.2f}")
-            except ValueError as error:
-                QMessageBox.warning(dialog, "Inventory Error", str(error))
-                return
-            except Exception as error:
-                QMessageBox.warning(dialog, "Database Error", f"Could not save sale: {error}")
-                return
+                return {"sale_id": sale_id, "sync_status": checkout_result.get("sync_status")}
 
-            payment_result = {
-                "sale_id": sale_id,
-                "sale_items": sale_items,
-                "total_amount": total_amount,
-                "tendered_amount": tendered_amount,
-                "change_amount": change_amount,
-                "payment_method": "Split",
-                "note": note_text,
-                "payments": payment_rows,
-                "sync_status": checkout_result.get("sync_status"),
-            }
-            dialog.accept()
+            def on_success(result: dict[str, object]) -> None:
+                nonlocal payment_result
+                confirm_button.setEnabled(True)
+                payment_result = {
+                    "sale_id": result["sale_id"],
+                    "sale_items": sale_items,
+                    "total_amount": total_amount,
+                    "tendered_amount": tendered_amount,
+                    "change_amount": change_amount,
+                    "payment_method": "Split",
+                    "note": note_text,
+                    "payments": payment_rows,
+                    "sync_status": result.get("sync_status"),
+                }
+                dialog.accept()
+
+            def on_error(error: Exception) -> None:
+                confirm_button.setEnabled(True)
+                self.request_background_sync("checkout-recovery", {"full"}, delay_ms=0)
+                QMessageBox.warning(dialog, "Inventory Error", str(error))
+
+            confirm_button.setEnabled(False)
+            if not checkout_runner.start(
+                task=checkout_task,
+                message="Processing split payment...",
+                on_success=on_success,
+                on_error=on_error,
+                timeout_ms=CHECKOUT_TIMEOUT_MS,
+                timeout_message=(
+                    "Payment is taking longer than expected. A recovery sync will run; "
+                    "please check sales before trying again."
+                ),
+            ):
+                confirm_button.setEnabled(True)
 
         confirm_button.clicked.connect(confirm_split_payment)
         if dialog.exec() == QDialog.DialogCode.Accepted and payment_result is not None:

@@ -30,6 +30,14 @@ def _data_or_raise(response: Any, action: str) -> Any:
     return getattr(response, "data", None)
 
 
+def _single_row_or_raise(data: Any, action: str) -> dict[str, Any]:
+    if isinstance(data, dict):
+        return data
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        return data[0]
+    raise CloudProductError(f"Supabase {action} returned an invalid payload.")
+
+
 def _clean_storage_part(value: str) -> str:
     clean_value = re.sub(r"[^A-Za-z0-9._-]+", "-", value.strip())
     return clean_value.strip(".-") or "file"
@@ -146,7 +154,6 @@ def upsert_product(payload: dict[str, Any], cloud_id: str | None = None) -> dict
                 "id,store_id,barcode,sku,name,price,category,stock_qty,"
                 "requires_weight,active,storage_path,image_url,updated_at"
             )
-            .single()
             .execute()
         )
     else:
@@ -157,13 +164,10 @@ def upsert_product(payload: dict[str, Any], cloud_id: str | None = None) -> dict
                 "id,store_id,barcode,sku,name,price,category,stock_qty,"
                 "requires_weight,active,storage_path,image_url,updated_at"
             )
-            .single()
             .execute()
         )
     data = _data_or_raise(response, "product upsert")
-    if not isinstance(data, dict):
-        raise CloudProductError("Supabase product upsert returned an invalid payload.")
-    return data
+    return _single_row_or_raise(data, "product upsert")
 
 
 def fetch_product_stock(cloud_id: str) -> dict[str, Any] | None:
@@ -213,13 +217,10 @@ def set_product_active(cloud_id: str, active: bool) -> dict[str, Any]:
         .update({"active": active})
         .eq("id", cloud_id)
         .select("id,store_id,active,updated_at")
-        .single()
         .execute()
     )
     data = _data_or_raise(response, "product active update")
-    if not isinstance(data, dict):
-        raise CloudProductError("Supabase product active update returned an invalid payload.")
-    return data
+    return _single_row_or_raise(data, "product active update")
 
 
 def replace_product_barcodes(

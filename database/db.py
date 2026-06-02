@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from app_paths import database_path
+from cloud import auth as cloud_auth
 from cloud import inventory as cloud_inventory
 from cloud import products as cloud_products
 
@@ -114,6 +115,7 @@ def rebuild_products_for_store_scoped_uniques(connection: sqlite3.Connection) ->
             storage_path TEXT,
             image_url TEXT,
             sync_status TEXT DEFAULT 'local',
+            sync_error TEXT,
             last_synced_at TEXT,
             cloud_updated_at TEXT
         )
@@ -124,7 +126,7 @@ def rebuild_products_for_store_scoped_uniques(connection: sqlite3.Connection) ->
         INSERT INTO products (
             id, store_id, cloud_id, barcode, sku, name, price, category, stock_qty,
             requires_weight, active, updated_at, image_path, storage_path, image_url,
-            sync_status, last_synced_at, cloud_updated_at
+            sync_status, sync_error, last_synced_at, cloud_updated_at
         )
         SELECT
             id,
@@ -143,6 +145,7 @@ def rebuild_products_for_store_scoped_uniques(connection: sqlite3.Connection) ->
             NULL,
             NULL,
             COALESCE(sync_status, 'local'),
+            NULL,
             last_synced_at,
             NULL
         FROM products_store_scope_migration
@@ -220,6 +223,7 @@ def init_db() -> None:
                 storage_path TEXT,
                 image_url TEXT,
                 sync_status TEXT DEFAULT 'local',
+                sync_error TEXT,
                 last_synced_at TEXT,
                 cloud_updated_at TEXT
             )
@@ -315,6 +319,7 @@ def init_db() -> None:
         add_column_if_missing(connection, "products", "store_id", "store_id TEXT")
         add_column_if_missing(connection, "products", "cloud_id", "cloud_id TEXT")
         add_column_if_missing(connection, "products", "sync_status", "sync_status TEXT DEFAULT 'local'")
+        add_column_if_missing(connection, "products", "sync_error", "sync_error TEXT")
         add_column_if_missing(connection, "products", "last_synced_at", "last_synced_at TEXT")
         add_column_if_missing(connection, "products", "cloud_updated_at", "cloud_updated_at TEXT")
         add_column_if_missing(connection, "product_barcodes", "store_id", "store_id TEXT")
@@ -890,7 +895,8 @@ def get_all_products(limit: int | None = None, offset: int = 0) -> list[dict[str
         store_id = current_store_id_from_connection(connection)
         query = """
             SELECT id, store_id, cloud_id, barcode, name, price, category, stock_qty,
-                   requires_weight, image_path, storage_path, image_url
+                   requires_weight, image_path, storage_path, image_url,
+                   sync_status, sync_error
             FROM products
             WHERE active = 1 AND store_id = ?
             ORDER BY id DESC
@@ -920,7 +926,7 @@ def search_products(
         query = """
             SELECT DISTINCT p.id, p.store_id, p.cloud_id, p.barcode, p.name, p.price,
                    p.category, p.stock_qty, p.requires_weight, p.image_path,
-                   p.storage_path, p.image_url
+                   p.storage_path, p.image_url, p.sync_status, p.sync_error
             FROM products p
             LEFT JOIN product_barcodes pb ON pb.product_id = p.id
             WHERE p.active = 1 AND p.store_id = ?
@@ -962,6 +968,69 @@ def count_products(keyword: str = "") -> int:
         return int(row["count"] if row else 0)
 
 
+def _saleable_product_filter(store_id: str, alias: str = "") -> tuple[str, list[Any]]:
+    prefix = f"{alias}." if alias else ""
+    if cloud_sync_enabled_for_store(store_id):
+        return (
+            f"{prefix}active = 1 AND {prefix}store_id = ? AND {prefix}sync_status = 'synced' "
+            f"AND {prefix}cloud_id IS NOT NULL AND TRIM({prefix}cloud_id) <> ''",
+            [store_id],
+        )
+    return f"{prefix}active = 1 AND {prefix}store_id = ?", [store_id]
+
+
+def get_saleable_products(limit: int | None = None, offset: int = 0) -> list[dict[str, Any]]:
+    init_db()
+    with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
+        where_clause, params = _saleable_product_filter(store_id)
+        query = f"""
+            SELECT id, store_id, cloud_id, barcode, name, price, category, stock_qty,
+                   requires_weight, image_path, storage_path, image_url,
+                   sync_status, sync_error
+            FROM products
+            WHERE {where_clause}
+            ORDER BY id DESC
+            """
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        rows = connection.execute(query, params).fetchall()
+        return product_rows_to_dicts(connection, rows)
+
+
+def search_saleable_products(
+    keyword: str,
+    limit: int | None = None,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    clean_keyword = keyword.strip()
+    if not clean_keyword:
+        return get_saleable_products(limit=limit, offset=offset)
+
+    init_db()
+    search_value = f"%{clean_keyword}%"
+    with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
+        where_clause, params = _saleable_product_filter(store_id, "p")
+        query = f"""
+            SELECT DISTINCT p.id, p.store_id, p.cloud_id, p.barcode, p.name, p.price,
+                   p.category, p.stock_qty, p.requires_weight, p.image_path,
+                   p.storage_path, p.image_url, p.sync_status, p.sync_error
+            FROM products p
+            LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+            WHERE {where_clause}
+              AND (p.name LIKE ? OR p.barcode LIKE ? OR p.sku LIKE ? OR (pb.store_id = ? AND pb.barcode LIKE ?))
+            ORDER BY p.name ASC, p.id DESC
+            """
+        params.extend([search_value, search_value, search_value, store_id, search_value])
+        if limit is not None:
+            query += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+        rows = connection.execute(query, params).fetchall()
+        return product_rows_to_dicts(connection, rows)
+
+
 def get_product_by_id(product_id: int) -> dict[str, Any] | None:
     init_db()
     with get_connection() as connection:
@@ -969,7 +1038,8 @@ def get_product_by_id(product_id: int) -> dict[str, Any] | None:
         row = connection.execute(
             """
             SELECT id, store_id, cloud_id, barcode, name, price, category, stock_qty,
-                   requires_weight, image_path, storage_path, image_url
+                   requires_weight, image_path, storage_path, image_url,
+                   sync_status, sync_error
             FROM products
             WHERE active = 1 AND id = ? AND store_id = ?
             LIMIT 1
@@ -992,7 +1062,8 @@ def get_product_by_barcode(barcode: str) -> dict[str, Any] | None:
         cursor = connection.execute(
             """
             SELECT p.id, p.store_id, p.cloud_id, p.barcode, p.name, p.price, p.category,
-                   p.stock_qty, p.requires_weight, p.image_path, p.storage_path, p.image_url
+                   p.stock_qty, p.requires_weight, p.image_path, p.storage_path, p.image_url,
+                   p.sync_status, p.sync_error
             FROM products p
             LEFT JOIN product_barcodes pb ON pb.product_id = p.id
             WHERE p.active = 1 AND p.store_id = ?
@@ -1009,6 +1080,59 @@ def get_product_by_barcode(barcode: str) -> dict[str, Any] | None:
             fetch_product_barcodes(connection, int(row["id"])),
             matched_barcode=clean_barcode,
         )
+
+
+def get_saleable_product_by_barcode(barcode: str) -> dict[str, Any] | None:
+    init_db()
+    clean_barcode = barcode.strip()
+    if not clean_barcode:
+        return None
+
+    with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
+        where_clause, params = _saleable_product_filter(store_id, "p")
+        cursor = connection.execute(
+            f"""
+            SELECT p.id, p.store_id, p.cloud_id, p.barcode, p.name, p.price, p.category,
+                   p.stock_qty, p.requires_weight, p.image_path, p.storage_path, p.image_url,
+                   p.sync_status, p.sync_error
+            FROM products p
+            LEFT JOIN product_barcodes pb ON pb.product_id = p.id
+            WHERE {where_clause}
+              AND (p.barcode = ? OR (pb.store_id = ? AND pb.barcode = ?))
+            LIMIT 1
+            """,
+            [*params, clean_barcode, store_id, clean_barcode],
+        )
+        row = cursor.fetchone()
+        if row is None:
+            return None
+        return product_row_to_dict(
+            row,
+            fetch_product_barcodes(connection, int(row["id"])),
+            matched_barcode=clean_barcode,
+        )
+
+
+def get_saleable_product_by_id(product_id: int) -> dict[str, Any] | None:
+    init_db()
+    with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
+        where_clause, params = _saleable_product_filter(store_id)
+        row = connection.execute(
+            f"""
+            SELECT id, store_id, cloud_id, barcode, name, price, category, stock_qty,
+                   requires_weight, image_path, storage_path, image_url,
+                   sync_status, sync_error
+            FROM products
+            WHERE {where_clause} AND id = ?
+            LIMIT 1
+            """,
+            [*params, product_id],
+        ).fetchone()
+        if row is None:
+            return None
+        return product_row_to_dict(row, fetch_product_barcodes(connection, int(row["id"])))
 
 
 def barcode_exists(barcode: str, exclude_product_id: int | None = None) -> bool:
@@ -1055,6 +1179,7 @@ def add_product(
     requires_weight: bool,
     image_path: str,
     barcodes: list[str],
+    sync_cloud: bool = True,
 ) -> int:
     init_db()
     normalized_barcodes = normalize_barcodes(barcodes)
@@ -1066,9 +1191,9 @@ def add_product(
             """
             INSERT INTO products (
                 store_id, barcode, name, price, category, stock_qty, requires_weight,
-                image_path, sync_status
+                image_path, sync_status, sync_error
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
             """,
             (
                 store_id,
@@ -1094,7 +1219,7 @@ def add_product(
             ],
         )
         connection.commit()
-    if sync_status == "pending":
+    if sync_status == "pending" and sync_cloud:
         push_product_to_cloud(product_id)
     return product_id
 
@@ -1108,6 +1233,7 @@ def update_product(
     requires_weight: bool,
     image_path: str,
     barcodes: list[str],
+    sync_cloud: bool = True,
 ) -> None:
     init_db()
     normalized_barcodes = normalize_barcodes(barcodes)
@@ -1119,7 +1245,7 @@ def update_product(
             """
             UPDATE products
             SET barcode = ?, name = ?, price = ?, category = ?, stock_qty = ?, requires_weight = ?,
-                image_path = ?, sync_status = ?, updated_at = CURRENT_TIMESTAMP
+                image_path = ?, sync_status = ?, sync_error = NULL, updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND store_id = ?
             """,
             (
@@ -1150,11 +1276,11 @@ def update_product(
             ],
         )
         connection.commit()
-    if sync_status == "pending":
+    if sync_status == "pending" and sync_cloud:
         push_product_to_cloud(product_id)
 
 
-def delete_product(product_id: int) -> None:
+def delete_product(product_id: int, sync_cloud: bool = True) -> None:
     init_db()
     with get_connection() as connection:
         store_id = current_store_id_from_connection(connection)
@@ -1162,14 +1288,123 @@ def delete_product(product_id: int) -> None:
         connection.execute(
             """
             UPDATE products
-            SET active = 0, sync_status = ?, updated_at = CURRENT_TIMESTAMP
+            SET active = 0, sync_status = ?, sync_error = NULL, updated_at = CURRENT_TIMESTAMP
             WHERE id = ? AND store_id = ?
             """,
             (sync_status, product_id, store_id),
         )
         connection.commit()
-    if sync_status == "pending":
+    if sync_status == "pending" and sync_cloud:
         push_product_to_cloud(product_id)
+
+
+def save_product_cloud_required(
+    product_id: int | None,
+    name: str,
+    price: float,
+    category: str,
+    stock_qty: float,
+    requires_weight: bool,
+    image_path: str,
+    barcodes: list[str],
+) -> int:
+    init_db()
+    store_id = get_current_store_id()
+    if not cloud_sync_enabled_for_store(store_id):
+        if product_id is None:
+            return add_product(name, price, category, stock_qty, requires_weight, image_path, barcodes)
+        update_product(product_id, name, price, category, stock_qty, requires_weight, image_path, barcodes)
+        return product_id
+
+    created_product_id: int | None = None
+    try:
+        if product_id is None:
+            created_product_id = add_product(
+                name,
+                price,
+                category,
+                stock_qty,
+                requires_weight,
+                image_path,
+                barcodes,
+                sync_cloud=False,
+            )
+            product_id = created_product_id
+        else:
+            update_product(
+                product_id,
+                name,
+                price,
+                category,
+                stock_qty,
+                requires_weight,
+                image_path,
+                barcodes,
+                sync_cloud=False,
+            )
+        _push_product_to_cloud_or_raise(product_id)
+        return product_id
+    except Exception as error:
+        if created_product_id is not None:
+            with get_connection() as connection:
+                connection.execute(
+                    "DELETE FROM product_barcodes WHERE product_id = ?",
+                    (created_product_id,),
+                )
+                connection.execute("DELETE FROM products WHERE id = ?", (created_product_id,))
+                connection.commit()
+        elif product_id is not None:
+            with get_connection() as connection:
+                _set_product_sync_state(connection, product_id, "pending", sync_error=str(error))
+                connection.commit()
+        raise
+
+
+def delete_product_cloud_required(product_id: int) -> None:
+    init_db()
+    with get_connection() as connection:
+        store_id = current_store_id_from_connection(connection)
+        row = _product_sync_row(connection, product_id)
+        if row is None:
+            return
+        cloud_id = str(row["cloud_id"] or "").strip()
+        if not cloud_sync_enabled_for_store(store_id):
+            delete_product(product_id)
+            return
+
+    try:
+        if cloud_id:
+            cloud_row = cloud_products.set_product_active(cloud_id, False)
+            with get_connection() as connection:
+                connection.execute(
+                    """
+                    UPDATE products
+                    SET active = 0, sync_status = 'synced', sync_error = NULL,
+                        cloud_updated_at = COALESCE(?, cloud_updated_at),
+                        last_synced_at = CURRENT_TIMESTAMP,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND store_id = ?
+                    """,
+                    (str(cloud_row.get("updated_at") or "") or None, product_id, store_id),
+                )
+                connection.commit()
+            return
+
+        with get_connection() as connection:
+            connection.execute(
+                """
+                UPDATE products
+                SET active = 0, sync_status = 'synced', sync_error = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ? AND store_id = ?
+                """,
+                (product_id, store_id),
+            )
+            connection.commit()
+    except Exception as error:
+        with get_connection() as connection:
+            _set_product_sync_state(connection, product_id, "pending", sync_error=str(error))
+            connection.commit()
+        raise
 
 
 def find_product_for_sale(keyword: str) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
@@ -1177,11 +1412,11 @@ def find_product_for_sale(keyword: str) -> tuple[dict[str, Any] | None, list[dic
     if not clean_keyword:
         return None, []
 
-    barcode_match = get_product_by_barcode(clean_keyword)
+    barcode_match = get_saleable_product_by_barcode(clean_keyword)
     if barcode_match is not None:
         return barcode_match, [barcode_match]
 
-    matches = search_products(clean_keyword)
+    matches = search_saleable_products(clean_keyword)
     exact_name_matches = [
         product for product in matches if str(product["name"]).lower() == clean_keyword.lower()
     ]
@@ -1258,7 +1493,8 @@ def _product_sync_row(connection: sqlite3.Connection, product_id: int) -> sqlite
     return connection.execute(
         """
         SELECT id, store_id, cloud_id, barcode, sku, name, price, category, stock_qty,
-               requires_weight, active, image_path, storage_path, image_url, sync_status
+               requires_weight, active, image_path, storage_path, image_url, sync_status,
+               sync_error
         FROM products
         WHERE id = ?
         LIMIT 1
@@ -1275,6 +1511,7 @@ def _set_product_sync_state(
     storage_path: str | None = None,
     image_url: str | None = None,
     cloud_updated_at: str | None = None,
+    sync_error: str | None = None,
 ) -> None:
     connection.execute(
         """
@@ -1284,10 +1521,11 @@ def _set_product_sync_state(
             image_url = COALESCE(?, image_url),
             cloud_updated_at = COALESCE(?, cloud_updated_at),
             sync_status = ?,
+            sync_error = ?,
             last_synced_at = CASE WHEN ? = 'synced' THEN CURRENT_TIMESTAMP ELSE last_synced_at END
         WHERE id = ?
         """,
-        (cloud_id, storage_path, image_url, cloud_updated_at, sync_status, sync_status, product_id),
+        (cloud_id, storage_path, image_url, cloud_updated_at, sync_status, sync_error, sync_status, product_id),
     )
 
 
@@ -1311,7 +1549,22 @@ def _cloud_payload_for_product(
     }
 
 
-def push_product_to_cloud(product_id: int) -> bool:
+def _require_cloud_session_for_store(store_id: str) -> None:
+    try:
+        profile = cloud_auth.fetch_profile()
+    except Exception as error:
+        raise cloud_products.CloudProductError(
+            "Supabase session expired or is not authenticated. Please log out and log in again."
+        ) from error
+
+    profile_store_id = str(profile.get("store_id") or "")
+    if profile_store_id != store_id:
+        raise cloud_products.CloudProductError(
+            "Current Supabase session belongs to a different store. Please log out and log in again."
+        )
+
+
+def _push_product_to_cloud_or_raise(product_id: int) -> bool:
     init_db()
     with get_connection() as connection:
         row = _product_sync_row(connection, product_id)
@@ -1321,94 +1574,113 @@ def push_product_to_cloud(product_id: int) -> bool:
         if not cloud_sync_enabled_for_store(store_id):
             return False
 
-    try:
-        with get_connection() as connection:
-            row = _product_sync_row(connection, product_id)
-            if row is None:
-                return False
-            store_id = str(row["store_id"] or "")
-            cloud_id = str(row["cloud_id"] or "") or None
-            active = bool(row["active"])
-            barcodes = fetch_product_barcodes(connection, product_id)
+    with get_connection() as connection:
+        row = _product_sync_row(connection, product_id)
+        if row is None:
+            return False
+        store_id = str(row["store_id"] or "")
+        cloud_id = str(row["cloud_id"] or "") or None
+        active = bool(row["active"])
+        barcodes = fetch_product_barcodes(connection, product_id)
 
-        if not active:
-            cloud_row: dict[str, Any] | None = None
-            if cloud_id:
-                cloud_row = cloud_products.set_product_active(cloud_id, False)
-            with get_connection() as connection:
-                _set_product_sync_state(
-                    connection,
-                    product_id,
-                    "synced",
-                    cloud_id=cloud_id,
-                    cloud_updated_at=str((cloud_row or {}).get("updated_at") or "") or None,
-                )
-                connection.commit()
-            return True
+    _require_cloud_session_for_store(store_id)
 
-        storage_path = str(row["storage_path"] or "") or None
-        image_url = str(row["image_url"] or "") or None
-        previous_cloud_stock: float | None = None
+    if not active:
+        cloud_row: dict[str, Any] | None = None
         if cloud_id:
-            previous_cloud_product = cloud_products.fetch_product_stock(cloud_id)
-            if previous_cloud_product is not None:
-                previous_cloud_stock = float(previous_cloud_product.get("stock_qty") or 0)
-
-        uploaded_storage_path, uploaded_image_url = cloud_products.upload_product_image(
-            store_id,
-            cloud_id or f"local-{product_id}",
-            str(row["image_path"] or ""),
-        )
-        storage_path = uploaded_storage_path or storage_path
-        image_url = uploaded_image_url or image_url
-
-        cloud_row = cloud_products.upsert_product(
-            _cloud_payload_for_product(row, storage_path, image_url),
-            cloud_id=cloud_id,
-        )
-        cloud_id = str(cloud_row["id"])
-        if previous_cloud_stock is not None:
-            stock_delta = float(row["stock_qty"] or 0) - previous_cloud_stock
-            cloud_products.record_inventory_adjustment(store_id, cloud_id, stock_delta, "adjustment")
-
-        with get_connection() as connection:
-            _set_product_sync_state(
-                connection,
-                product_id,
-                "pending",
-                cloud_id=cloud_id,
-                storage_path=storage_path,
-                image_url=image_url,
-            )
-            connection.commit()
-
-        cloud_products.replace_product_barcodes(store_id, cloud_id, barcodes)
-
+            cloud_row = cloud_products.set_product_active(cloud_id, False)
         with get_connection() as connection:
             _set_product_sync_state(
                 connection,
                 product_id,
                 "synced",
                 cloud_id=cloud_id,
-                storage_path=storage_path,
-                image_url=image_url,
-                cloud_updated_at=str(cloud_row.get("updated_at") or "") or None,
+                cloud_updated_at=str((cloud_row or {}).get("updated_at") or "") or None,
+                sync_error=None,
             )
             connection.commit()
         return True
-    except Exception:
+
+    storage_path = str(row["storage_path"] or "") or None
+    image_url = str(row["image_url"] or "") or None
+    previous_cloud_stock: float | None = None
+    if cloud_id:
+        previous_cloud_product = cloud_products.fetch_product_stock(cloud_id)
+        if previous_cloud_product is not None:
+            previous_cloud_stock = float(previous_cloud_product.get("stock_qty") or 0)
+
+    uploaded_storage_path, uploaded_image_url = cloud_products.upload_product_image(
+        store_id,
+        cloud_id or f"local-{product_id}",
+        str(row["image_path"] or ""),
+    )
+    storage_path = uploaded_storage_path or storage_path
+    image_url = uploaded_image_url or image_url
+
+    cloud_row = cloud_products.upsert_product(
+        _cloud_payload_for_product(row, storage_path, image_url),
+        cloud_id=cloud_id,
+    )
+    cloud_id = str(cloud_row["id"])
+    if previous_cloud_stock is not None:
+        stock_delta = float(row["stock_qty"] or 0) - previous_cloud_stock
+        cloud_products.record_inventory_adjustment(store_id, cloud_id, stock_delta, "adjustment")
+
+    with get_connection() as connection:
+        _set_product_sync_state(
+            connection,
+            product_id,
+            "pending",
+            cloud_id=cloud_id,
+            storage_path=storage_path,
+            image_url=image_url,
+            sync_error=None,
+        )
+        connection.commit()
+
+    cloud_products.replace_product_barcodes(store_id, cloud_id, barcodes)
+
+    with get_connection() as connection:
+        _set_product_sync_state(
+            connection,
+            product_id,
+            "synced",
+            cloud_id=cloud_id,
+            storage_path=storage_path,
+            image_url=image_url,
+            cloud_updated_at=str(cloud_row.get("updated_at") or "") or None,
+            sync_error=None,
+        )
+        connection.commit()
+    return True
+
+
+def push_product_to_cloud(product_id: int) -> bool:
+    try:
+        return _push_product_to_cloud_or_raise(product_id)
+    except Exception as error:
         with get_connection() as connection:
-            _set_product_sync_state(connection, product_id, "pending")
+            _set_product_sync_state(connection, product_id, "pending", sync_error=str(error))
             connection.commit()
         return False
 
 
-def retry_pending_product_sync(limit: int = 50) -> None:
+def retry_product_sync_required(product_id: int) -> bool:
+    try:
+        return _push_product_to_cloud_or_raise(product_id)
+    except Exception as error:
+        with get_connection() as connection:
+            _set_product_sync_state(connection, product_id, "pending", sync_error=str(error))
+            connection.commit()
+        raise
+
+
+def retry_pending_product_sync(limit: int = 50) -> dict[str, Any]:
     init_db()
     with get_connection() as connection:
         store_id = current_store_id_from_connection(connection)
         if not cloud_sync_enabled_for_store(store_id):
-            return
+            return {"attempted": 0, "synced": 0, "failed": 0, "errors": []}
         rows = connection.execute(
             """
             SELECT id
@@ -1420,8 +1692,24 @@ def retry_pending_product_sync(limit: int = 50) -> None:
             (store_id, limit),
         ).fetchall()
 
+    attempted = 0
+    synced = 0
+    errors: list[str] = []
     for row in rows:
-        push_product_to_cloud(int(row["id"]))
+        attempted += 1
+        product_id = int(row["id"])
+        if push_product_to_cloud(product_id):
+            synced += 1
+        else:
+            with get_connection() as connection:
+                error_row = connection.execute(
+                    "SELECT name, sync_error FROM products WHERE id = ? LIMIT 1",
+                    (product_id,),
+                ).fetchone()
+            product_name = str(error_row["name"] if error_row else product_id)
+            sync_error = str(error_row["sync_error"] if error_row else "Unknown sync error")
+            errors.append(f"{product_name}: {sync_error}")
+    return {"attempted": attempted, "synced": synced, "failed": attempted - synced, "errors": errors}
 
 
 def _upsert_cloud_product_local(
@@ -1499,6 +1787,7 @@ def _upsert_cloud_product_local(
             SET store_id = ?, cloud_id = ?, barcode = ?, sku = ?, name = ?, price = ?,
                 category = ?, stock_qty = ?, requires_weight = ?, active = ?,
                 image_path = ?, storage_path = ?, image_url = ?, cloud_updated_at = ?, sync_status = ?,
+                sync_error = NULL,
                 last_synced_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
@@ -1927,6 +2216,7 @@ def checkout_sale_cloud_first(
     note: str = "",
     payments: list[dict[str, Any]] | None = None,
     allow_offline: bool = False,
+    client_uuid: str | None = None,
 ) -> dict[str, Any]:
     init_db()
     if not sale_items:
@@ -1950,7 +2240,7 @@ def checkout_sale_cloud_first(
         )
         return {"sale_id": sale_id, "sync_status": "local", "cloud_id": None}
 
-    client_uuid = str(uuid.uuid4())
+    client_uuid = client_uuid or str(uuid.uuid4())
     payment_rows = normalize_payment_rows(payment_method, payments, total_amount)
 
     try:

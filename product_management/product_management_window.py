@@ -30,6 +30,7 @@ from login import get_setting
 from ui.currency import DEFAULT_CURRENCY_SYMBOL, format_money, get_currency_symbol_from_settings
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
+from ui.loading import BlockingTaskRunner, PRODUCT_SYNC_TIMEOUT_MS
 from ui.theme import MODERN_WIDGET_STYLESHEET
 from ui.thumbnail_cache import ThumbnailCache
 
@@ -271,6 +272,7 @@ class ProductTableModel(QAbstractTableModel):
         "Stock",
         "Category",
         "Requires Weight",
+        "Cloud Status",
         "Actions",
     ]
 
@@ -310,6 +312,9 @@ class ProductTableModel(QAbstractTableModel):
 
         if role == Qt.ItemDataRole.DisplayRole:
             barcodes = list(product.get("barcodes") or [])
+            sync_status = str(product.get("sync_status") or "local")
+            sync_error = str(product.get("sync_error") or "")
+            status_text = "Error" if sync_error else sync_status.title()
             values = {
                 0: str(self.offset + index.row() + 1),
                 1: "No Image" if not str(product.get("image_path") or "") else "",
@@ -319,9 +324,23 @@ class ProductTableModel(QAbstractTableModel):
                 5: f'{float(product.get("stock_qty") or 0):g}',
                 6: product["category"] or "",
                 7: "Yes" if product["requires_weight"] else "No",
-                8: "",
+                8: status_text,
+                9: "",
             }
             return values.get(column, "")
+
+        if role == Qt.ItemDataRole.ToolTipRole and column == 8:
+            return str(product.get("sync_error") or product.get("sync_status") or "")
+
+        if role == Qt.ItemDataRole.ForegroundRole and column == 8:
+            sync_error = str(product.get("sync_error") or "")
+            sync_status = str(product.get("sync_status") or "")
+            if sync_error:
+                return QColor("#B91C1C")
+            if sync_status == "synced":
+                return QColor("#047857")
+            if sync_status == "pending":
+                return QColor("#B45309")
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
             if column in (2, 3, 6):
@@ -331,8 +350,8 @@ class ProductTableModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.SizeHintRole:
             if column == 1:
                 return QSize(70, 54)
-            if column == 8:
-                return QSize(170, 54)
+            if column == 9:
+                return QSize(245, 54)
 
         return None
 
@@ -362,17 +381,28 @@ class ProductTableModel(QAbstractTableModel):
             return None
         return int(self.products[row]["id"])
 
+    def product_sync_status_at(self, row: int) -> tuple[str, str]:
+        if row < 0 or row >= len(self.products):
+            return "", ""
+        product = self.products[row]
+        return str(product.get("sync_status") or ""), str(product.get("sync_error") or "")
+
 
 class ProductActionsDelegate(QStyledItemDelegate):
     edit_requested = pyqtSignal(int)
+    retry_requested = pyqtSignal(int)
     delete_requested = pyqtSignal(int)
 
     def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
         if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, QColor("#DBEAFE"))
 
-        edit_rect, delete_rect = self.action_rects(option.rect)
+        model = index.model()
+        edit_rect, retry_rect, delete_rect = self.action_rects(option.rect)
+        sync_status, sync_error = model.product_sync_status_at(index.row())
         self.draw_action_button(painter, edit_rect, "Edit", "#2563EB")
+        retry_color = "#F59E0B" if sync_status == "pending" or sync_error else "#94A3B8"
+        self.draw_action_button(painter, retry_rect, "Retry", retry_color)
         self.draw_action_button(painter, delete_rect, "Delete", "#DC2626")
 
     def editorEvent(self, event, model, option, index: QModelIndex) -> bool:
@@ -380,7 +410,7 @@ class ProductActionsDelegate(QStyledItemDelegate):
             return False
 
         position = event.position().toPoint() if hasattr(event, "position") else event.pos()
-        edit_rect, delete_rect = self.action_rects(option.rect)
+        edit_rect, retry_rect, delete_rect = self.action_rects(option.rect)
         product_id = model.product_id_at(index.row())
         if product_id is None:
             return False
@@ -388,22 +418,29 @@ class ProductActionsDelegate(QStyledItemDelegate):
         if edit_rect.contains(position):
             self.edit_requested.emit(product_id)
             return True
+        if retry_rect.contains(position):
+            sync_status, sync_error = model.product_sync_status_at(index.row())
+            if sync_status == "pending" or sync_error:
+                self.retry_requested.emit(product_id)
+            return True
         if delete_rect.contains(position):
             self.delete_requested.emit(product_id)
             return True
         return False
 
-    def action_rects(self, cell_rect: QRect) -> tuple[QRect, QRect]:
+    def action_rects(self, cell_rect: QRect) -> tuple[QRect, QRect, QRect]:
         button_height = 32
         edit_width = 68
+        retry_width = 70
         delete_width = 78
         gap = 8
-        total_width = edit_width + gap + delete_width
+        total_width = edit_width + gap + retry_width + gap + delete_width
         left = cell_rect.left() + max((cell_rect.width() - total_width) // 2, 6)
         top = cell_rect.top() + max((cell_rect.height() - button_height) // 2, 4)
         edit_rect = QRect(left, top, edit_width, button_height)
-        delete_rect = QRect(left + edit_width + gap, top, delete_width, button_height)
-        return edit_rect, delete_rect
+        retry_rect = QRect(left + edit_width + gap, top, retry_width, button_height)
+        delete_rect = QRect(left + edit_width + gap + retry_width + gap, top, delete_width, button_height)
+        return edit_rect, retry_rect, delete_rect
 
     def draw_action_button(self, painter: QPainter, rect: QRect, text: str, color: str) -> None:
         painter.save()
@@ -422,6 +459,7 @@ class ProductDialog(QDialog):
         self.product_id = int(product["id"]) if product is not None else None
         self.image_path = str(product.get("image_path") or "") if product is not None else ""
         self.barcodes = list(product.get("barcodes") or []) if product is not None else []
+        self.save_task_runner = BlockingTaskRunner(self, timeout_ms=PRODUCT_SYNC_TIMEOUT_MS)
 
         self.setWindowTitle("Edit Product" if product is not None else "Add Product")
         self.setModal(True)
@@ -557,18 +595,18 @@ class ProductDialog(QDialog):
         button_layout.setSpacing(10)
         button_layout.addStretch(1)
 
-        cancel_button = QPushButton("Cancel")
-        IconManager.apply_button(cancel_button, "cancel", IconManager.LIGHT)
-        cancel_button.setObjectName("neutralButton")
-        cancel_button.clicked.connect(self.reject)
+        self.cancel_button = QPushButton("Cancel")
+        IconManager.apply_button(self.cancel_button, "cancel", IconManager.LIGHT)
+        self.cancel_button.setObjectName("neutralButton")
+        self.cancel_button.clicked.connect(self.reject)
 
-        save_button = QPushButton("Save")
-        IconManager.apply_button(save_button, "save", IconManager.LIGHT)
-        save_button.setObjectName("primaryButton")
-        save_button.clicked.connect(self.save_product)
+        self.save_button = QPushButton("Save")
+        IconManager.apply_button(self.save_button, "save", IconManager.LIGHT)
+        self.save_button.setObjectName("primaryButton")
+        self.save_button.clicked.connect(self.save_product)
 
-        button_layout.addWidget(cancel_button)
-        button_layout.addWidget(save_button)
+        button_layout.addWidget(self.cancel_button)
+        button_layout.addWidget(self.save_button)
         layout.addLayout(button_layout)
 
         self.update_image_preview()
@@ -586,16 +624,34 @@ class ProductDialog(QDialog):
         if form_data is None:
             return
 
-        try:
-            if self.product_id is None:
-                db.add_product(*form_data)
-            else:
-                db.update_product(self.product_id, *form_data)
-        except sqlite3.IntegrityError:
-            self.show_error("A product with one of these barcodes already exists.")
-            return
+        self.save_button.setEnabled(False)
+        self.cancel_button.setEnabled(False)
 
-        self.accept()
+        def save_task() -> int:
+            return db.save_product_cloud_required(self.product_id, *form_data)
+
+        def on_success(saved_product_id: int) -> None:
+            self.product_id = saved_product_id
+            self.accept()
+
+        def on_error(error: Exception) -> None:
+            self.save_button.setEnabled(True)
+            self.cancel_button.setEnabled(True)
+            if isinstance(error, sqlite3.IntegrityError):
+                self.show_error("A product with one of these barcodes already exists.")
+                return
+            self.show_error(f"Could not sync product to Supabase.\n\n{error}")
+
+        if not self.save_task_runner.start(
+            task=save_task,
+            message="Saving product to cloud...",
+            on_success=on_success,
+            on_error=on_error,
+            timeout_ms=PRODUCT_SYNC_TIMEOUT_MS,
+            timeout_message="Product sync is taking too long. Please check the network and try again.",
+        ):
+            self.save_button.setEnabled(True)
+            self.cancel_button.setEnabled(True)
 
     def get_form_data(
         self,
@@ -737,6 +793,7 @@ class ProductManagementWindow(QWidget):
         self.page_size = PRODUCT_TABLE_PAGE_SIZE
         self.total_products = 0
         self.products_loaded = False
+        self.blocking_task_runner = BlockingTaskRunner(self, timeout_ms=PRODUCT_SYNC_TIMEOUT_MS)
         self.search_timer = QTimer(self)
         self.search_timer.setSingleShot(True)
         self.search_timer.setInterval(300)
@@ -802,14 +859,17 @@ class ProductManagementWindow(QWidget):
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
         self.products_table.setColumnWidth(1, 82)
         self.products_table.setColumnWidth(3, 220)
-        self.products_table.setColumnWidth(8, 170)
+        self.products_table.setColumnWidth(8, 120)
+        self.products_table.setColumnWidth(9, 245)
 
         actions_delegate = ProductActionsDelegate(self.products_table)
         actions_delegate.edit_requested.connect(self.open_edit_dialog)
+        actions_delegate.retry_requested.connect(self.retry_product_sync)
         actions_delegate.delete_requested.connect(self.delete_product)
-        self.products_table.setItemDelegateForColumn(8, actions_delegate)
+        self.products_table.setItemDelegateForColumn(9, actions_delegate)
         self.actions_delegate = actions_delegate
 
         layout.addWidget(self.products_table, 1)
@@ -913,9 +973,46 @@ class ProductManagementWindow(QWidget):
         ):
             return
 
-        db.delete_product(product_id)
-        self.load_products()
-        self.data_changed.emit()
+        def delete_task() -> None:
+            db.delete_product_cloud_required(product_id)
+
+        def on_success(_result) -> None:
+            self.load_products()
+            self.data_changed.emit()
+
+        def on_error(error: Exception) -> None:
+            QMessageBox.warning(self, "Delete Sync Error", f"Could not delete product in Supabase.\n\n{error}")
+            self.load_products()
+
+        self.blocking_task_runner.start(
+            task=delete_task,
+            message="Deleting product from cloud...",
+            on_success=on_success,
+            on_error=on_error,
+            timeout_ms=PRODUCT_SYNC_TIMEOUT_MS,
+            timeout_message="Product delete sync is taking too long. Please try again.",
+        )
+
+    def retry_product_sync(self, product_id: int) -> None:
+        def retry_task() -> bool:
+            return db.retry_product_sync_required(product_id)
+
+        def on_success(_result) -> None:
+            self.load_products()
+            self.data_changed.emit()
+
+        def on_error(error: Exception) -> None:
+            QMessageBox.warning(self, "Product Sync Error", f"Could not sync product to Supabase.\n\n{error}")
+            self.load_products()
+
+        self.blocking_task_runner.start(
+            task=retry_task,
+            message="Retrying product sync...",
+            on_success=on_success,
+            on_error=on_error,
+            timeout_ms=PRODUCT_SYNC_TIMEOUT_MS,
+            timeout_message="Product sync is taking too long. Please try again.",
+        )
 
     def format_barcodes_for_table(self, barcodes: list[str]) -> str:
         return format_barcodes_for_display(barcodes)

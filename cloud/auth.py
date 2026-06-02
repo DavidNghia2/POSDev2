@@ -34,6 +34,63 @@ def _user_id_from_auth_response(response: Any) -> str | None:
     return None
 
 
+def current_auth_user_id() -> str | None:
+    try:
+        response = get_supabase_client().auth.get_user()
+    except Exception:
+        return None
+    user = getattr(response, "user", None)
+    if user is not None:
+        return str(getattr(user, "id", "") or "") or None
+    data = getattr(response, "data", None)
+    if isinstance(data, dict):
+        user_data = data.get("user") or {}
+        return str(user_data.get("id") or "") or None
+    return None
+
+
+def current_session_tokens() -> dict[str, str]:
+    try:
+        session = get_supabase_client().auth.get_session()
+    except Exception:
+        return {}
+    if session is None:
+        return {}
+
+    access_token = str(getattr(session, "access_token", "") or "")
+    refresh_token = str(getattr(session, "refresh_token", "") or "")
+    expires_at = str(getattr(session, "expires_at", "") or "")
+    tokens: dict[str, str] = {}
+    if access_token:
+        tokens["access_token"] = access_token
+    if refresh_token:
+        tokens["refresh_token"] = refresh_token
+    if expires_at:
+        tokens["expires_at"] = expires_at
+    return tokens
+
+
+def restore_session(access_token: str | None, refresh_token: str | None) -> str:
+    clean_access_token = (access_token or "").strip()
+    clean_refresh_token = (refresh_token or "").strip()
+    if not clean_access_token and not clean_refresh_token:
+        raise CloudAuthError("Missing remembered Supabase session.")
+
+    client = get_supabase_client()
+    try:
+        if clean_access_token:
+            response = client.auth.set_session(clean_access_token, clean_refresh_token)
+        else:
+            response = client.auth.refresh_session(clean_refresh_token)
+    except Exception as error:
+        raise CloudAuthError("Remembered Supabase session expired. Please log in again.") from error
+
+    auth_user_id = _user_id_from_auth_response(response) or current_auth_user_id()
+    if not auth_user_id:
+        raise CloudAuthError("Could not restore remembered Supabase session.")
+    return auth_user_id
+
+
 def _session_from_auth_response(response: Any) -> Any | None:
     session = getattr(response, "session", None)
     if session is not None:
@@ -68,6 +125,7 @@ def _normalize_profile(profile: dict[str, Any]) -> dict[str, Any]:
         "role_name": str(role_name),
         "permissions": str(permissions),
         "active": bool(profile.get("active", True)),
+        "deleted_at": profile.get("deleted_at"),
     }
 
 
@@ -98,7 +156,7 @@ def _with_role_payload(client: Any, profile: dict[str, Any]) -> dict[str, Any]:
 def _fetch_profile_row(client: Any, auth_user_id: str) -> dict[str, Any] | None:
     response = (
         client.table("profiles")
-        .select("auth_user_id,store_id,email,full_name,role_id,active,roles(id,name,permissions),stores(id,name)")
+        .select("auth_user_id,store_id,email,full_name,role_id,active,deleted_at,roles(id,name,permissions),stores(id,name)")
         .eq("auth_user_id", auth_user_id)
         .limit(1)
         .execute()
@@ -244,7 +302,7 @@ def list_store_users() -> list[dict[str, Any]]:
     response = (
         client
         .table("profiles")
-        .select("auth_user_id,store_id,email,full_name,role_id,active,roles(id,name,permissions),stores(id,name)")
+        .select("auth_user_id,store_id,email,full_name,role_id,active,deleted_at,roles(id,name,permissions),stores(id,name)")
         .order("created_at", desc=True)
         .execute()
     )
@@ -288,6 +346,7 @@ def admin_update_user(
     role_name: str,
     password: str | None = None,
     active: bool = True,
+    deleted_at: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "auth_user_id": auth_user_id,
@@ -295,6 +354,7 @@ def admin_update_user(
         "full_name": full_name.strip(),
         "role_name": role_name,
         "active": active,
+        "deleted_at": deleted_at,
     }
     if password:
         payload["password"] = password

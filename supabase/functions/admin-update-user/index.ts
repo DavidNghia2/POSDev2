@@ -47,7 +47,7 @@ serve(async (req) => {
 
     const { data: targetProfile, error: targetError } = await adminClient
       .from("profiles")
-      .select("auth_user_id,store_id,role_id,roles(name)")
+      .select("auth_user_id,store_id,role_id,active,deleted_at,roles(name)")
       .eq("auth_user_id", body.auth_user_id)
       .single();
     if (targetError || !targetProfile || targetProfile.store_id !== callerProfile.store_id) {
@@ -56,6 +56,10 @@ serve(async (req) => {
 
     if (targetProfile.auth_user_id === callerData.user.id && body.active === false) {
       throw new Error("You cannot deactivate your own account");
+    }
+
+    if (targetProfile.auth_user_id === callerData.user.id && body.deleted_at) {
+      throw new Error("You cannot delete your own account");
     }
 
     const { data: role, error: roleError } = await adminClient
@@ -76,8 +80,13 @@ serve(async (req) => {
     if (countError) {
       throw countError;
     }
-    if (roleNameFromProfile(targetProfile) === "Admin" && role.name !== "Admin" && (activeAdminCount ?? 0) <= 1) {
+    const targetIsAdmin = roleNameFromProfile(targetProfile) === "Admin";
+    const targetWillBeInactive = body.active === false || Boolean(body.deleted_at);
+    if (targetIsAdmin && role.name !== "Admin" && (activeAdminCount ?? 0) <= 1) {
       throw new Error("Cannot remove the last active admin from this store");
+    }
+    if (targetIsAdmin && targetWillBeInactive && (activeAdminCount ?? 0) <= 1) {
+      throw new Error("Cannot disable or delete the last active admin from this store");
     }
 
     const authUpdates: Record<string, unknown> = {
@@ -102,11 +111,12 @@ serve(async (req) => {
         full_name: body.full_name,
         role_id: role.id,
         active: body.active !== false,
+        deleted_at: Object.prototype.hasOwnProperty.call(body, "deleted_at") ? body.deleted_at : targetProfile.deleted_at,
         updated_at: new Date().toISOString(),
       })
       .eq("auth_user_id", body.auth_user_id)
       .eq("store_id", callerProfile.store_id)
-      .select("auth_user_id,store_id,email,full_name,role_id,active,roles(id,name,permissions),stores(id,name)")
+      .select("auth_user_id,store_id,email,full_name,role_id,active,deleted_at,roles(id,name,permissions),stores(id,name)")
       .single();
     if (updateError) {
       throw updateError;

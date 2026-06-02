@@ -1,10 +1,12 @@
 from time import monotonic
+from typing import Any, Callable
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
     QHeaderView,
@@ -19,16 +21,234 @@ from PyQt6.QtWidgets import (
 
 from login import (
     add_user,
-    delete_user,
     get_all_roles,
     get_all_users,
     log_audit,
     refresh_store_users_from_cloud,
+    set_user_active,
+    soft_delete_user,
     update_user,
 )
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
+from ui.loading import BlockingTaskRunner, USER_SYNC_TIMEOUT_MS
 from ui.theme import MODERN_WIDGET_STYLESHEET
+
+
+def row_value(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+
+
+class UserEditDialog(QDialog):
+    def __init__(
+        self,
+        user: Any,
+        roles: list[Any],
+        save_callback: Callable[[dict[str, Any]], dict[str, object]],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.user = user
+        self.roles = roles
+        self.save_callback = save_callback
+        self.runner = BlockingTaskRunner(self, timeout_ms=USER_SYNC_TIMEOUT_MS)
+        self.result_payload: dict[str, object] | None = None
+        self.setWindowTitle("Edit User")
+        self.setModal(True)
+        self.setMinimumWidth(420)
+        self.create_ui()
+        self.apply_styles()
+        self.bind_user()
+
+    def create_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(13)
+
+        title = IconManager.label("Edit User", "edit", "dialogTitle", icon_size=20)
+        layout.addWidget(title)
+
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("Email")
+        self.full_name_input = QLineEdit()
+        self.full_name_input.setPlaceholderText("Full name")
+        self.role_combo = QComboBox()
+        self.new_password_input = QLineEdit()
+        self.new_password_input.setPlaceholderText("New password (optional)")
+        self.new_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setPlaceholderText("Confirm new password")
+        self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        for label_text, widget in (
+            ("Email", self.email_input),
+            ("Full Name", self.full_name_input),
+            ("Role", self.role_combo),
+            ("New Password", self.new_password_input),
+            ("Confirm New Password", self.confirm_password_input),
+        ):
+            label = QLabel(label_text)
+            label.setObjectName("formLabel")
+            layout.addWidget(label)
+            layout.addWidget(widget)
+
+        self.feedback_label = QLabel("")
+        self.feedback_label.setObjectName("dialogFeedback")
+        self.feedback_label.setWordWrap(True)
+        layout.addWidget(self.feedback_label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel_button = QPushButton("Cancel")
+        cancel_button.setObjectName("neutralButton")
+        cancel_button.clicked.connect(self.reject)
+        self.save_button = QPushButton("Save")
+        self.save_button.setObjectName("primaryButton")
+        IconManager.apply_button(self.save_button, "save", IconManager.LIGHT)
+        self.save_button.clicked.connect(self.save_user)
+        buttons.addWidget(cancel_button)
+        buttons.addWidget(self.save_button)
+        layout.addLayout(buttons)
+
+    def bind_user(self) -> None:
+        self.email_input.setText(str(row_value(self.user, "email") or row_value(self.user, "username") or ""))
+        self.full_name_input.setText(str(row_value(self.user, "full_name") or ""))
+        self.load_roles(int(row_value(self.user, "role_id") or 0))
+
+    def load_roles(self, selected_role_id: int) -> None:
+        self.role_combo.clear()
+        for role in self.roles:
+            role_id = int(row_value(role, "id") or 0)
+            self.role_combo.addItem(str(row_value(role, "name") or ""), role_id)
+            if role_id == selected_role_id:
+                self.role_combo.setCurrentIndex(self.role_combo.count() - 1)
+        if selected_role_id and self.role_combo.currentData() != selected_role_id:
+            self.feedback_label.setText("Current role no longer exists. Please select a role.")
+
+    def form_data(self) -> dict[str, Any]:
+        return {
+            "user_id": int(row_value(self.user, "id")),
+            "email": self.email_input.text().strip(),
+            "full_name": self.full_name_input.text().strip(),
+            "role_id": self.role_combo.currentData(),
+            "password": self.new_password_input.text(),
+            "confirm_password": self.confirm_password_input.text(),
+        }
+
+    def save_user(self) -> None:
+        data = self.form_data()
+        if not data["email"] or not data["full_name"]:
+            self.feedback_label.setText("Please fill email and full name.")
+            return
+        if data["role_id"] is None:
+            self.feedback_label.setText("Please select a role.")
+            return
+        if data["password"] or data["confirm_password"]:
+            if data["password"] != data["confirm_password"]:
+                self.feedback_label.setText("New password confirmation does not match.")
+                return
+
+        def on_success(result: dict[str, object]) -> None:
+            self.result_payload = result
+            self.accept()
+
+        def on_error(error: Exception) -> None:
+            self.feedback_label.setText(str(error))
+            self.save_button.setEnabled(True)
+
+        self.feedback_label.setText("")
+        self.save_button.setEnabled(False)
+        started = self.runner.start(
+            lambda: self.save_callback(data),
+            "Updating user...",
+            on_success=on_success,
+            on_error=on_error,
+            timeout_message="Updating this user is taking too long. Please check the network and try again.",
+        )
+        if not started:
+            self.save_button.setEnabled(True)
+            self.feedback_label.setText("A user sync task is already running.")
+
+    def apply_styles(self) -> None:
+        self.setStyleSheet(
+            """
+            QDialog {
+                background: #EEF1F4;
+            }
+            #dialogTitle {
+                color: #17212B;
+                font-size: 20px;
+                font-weight: 800;
+            }
+            #formLabel, #dialogFeedback {
+                color: #64707D;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            #dialogFeedback {
+                color: #B91C1C;
+            }
+            QLineEdit, QComboBox {
+                background: #FFFFFF;
+                border: 1px solid #C9D3DE;
+                border-radius: 8px;
+                padding: 9px 11px;
+            }
+            QPushButton {
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-weight: 800;
+                padding: 10px 14px;
+            }
+            #primaryButton {
+                background: #2563EB;
+            }
+            #neutralButton {
+                background: #E2E8F0;
+                color: #17212B;
+            }
+            QPushButton:disabled {
+                background: #CBD5E1;
+                color: #64748B;
+            }
+            """ + MODERN_WIDGET_STYLESHEET
+        )
+
+
+class StatusToggle(QPushButton):
+    def __init__(self, checked: bool, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setChecked(checked)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedSize(48, 26)
+        self.setText("")
+        # Reset CSS để tránh padding thừa kế từ QPushButton gây lệch layout ô
+        self.setStyleSheet("background: transparent; border: none; padding: 0;")
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        track_color = QColor("#0F766E") if self.isChecked() else QColor("#CBD5E1")
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(track_color)
+        painter.drawRoundedRect(QRectF(0, 1, 48, 24), 12, 12)
+
+        knob_x = 24 if self.isChecked() else 3
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.drawEllipse(QRectF(knob_x, 4, 18, 18))
+
+        painter.setPen(QPen(QColor("#FFFFFF") if self.isChecked() else QColor("#64748B"), 2))
+        if self.isChecked():
+            painter.drawLine(12, 14, 16, 18)
+            painter.drawLine(16, 18, 22, 10)
+        else:
+            painter.drawLine(30, 10, 36, 16)
+            painter.drawLine(36, 10, 30, 16)
 
 
 class UserManagementWindow(QWidget):
@@ -38,236 +258,196 @@ class UserManagementWindow(QWidget):
     def __init__(self, current_user: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_user = current_user
-        self.selected_user_id: int | None = None
         self.last_sync_request_at = 0.0
-        self.last_status_message = ""
+        self.highlight_user_id: int | None = None
+        self.highlight_user_email = ""
+        self.roles: list[Any] = []
+        self.user_sync_runner = BlockingTaskRunner(self, timeout_ms=USER_SYNC_TIMEOUT_MS)
         self.create_ui()
-        self.load_users()
         self.load_roles()
-        self.update_form_mode()
+        self.load_users()
 
     def create_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 24, 28, 24)
         layout.setSpacing(18)
-        
-        # Header
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(12)
-        
-        title_block = QVBoxLayout()
-        title_block.setSpacing(4)
-        
-        title_label = IconManager.label("User Management", "users", "titleLabel", icon_size=20)
-        
-        subtitle_label = QLabel("Manage users and access permissions")
-        subtitle_label.setObjectName("subtitleLabel")
-        
-        title_block.addWidget(title_label)
-        title_block.addWidget(subtitle_label)
-        
-        header_layout.addLayout(title_block)
-        header_layout.addStretch()
-        
-        layout.addLayout(header_layout)
-        
-        # Content split
-        content_layout = QHBoxLayout()
-        content_layout.setSpacing(18)
-        
-        # Left panel - User form
-        form_panel = self.create_form_panel()
-        
-        # Right panel - User list
-        table_panel = self.create_table_panel()
-        
-        content_layout.addWidget(form_panel)
-        content_layout.addWidget(table_panel, 1)
-        
-        layout.addLayout(content_layout, 1)
+
+        header = QVBoxLayout()
+        header.setSpacing(4)
+        header.addWidget(IconManager.label("User Management", "users", "titleLabel", icon_size=20))
+        subtitle = QLabel("Create users and manage store access")
+        subtitle.setObjectName("subtitleLabel")
+        header.addWidget(subtitle)
+        layout.addLayout(header)
+
+        content = QHBoxLayout()
+        content.setSpacing(18)
+        content.addWidget(self.create_form_panel())
+        content.addWidget(self.create_table_panel(), 1)
+        layout.addLayout(content, 1)
+        self.create_toast_label()
 
     def create_form_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("panel")
         panel.setMinimumWidth(300)
         panel.setMaximumWidth(360)
-        
+
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(22, 22, 22, 22)
-        layout.setSpacing(16)
-        
-        section_label = IconManager.label("User Details", "user", "sectionLabel")
-        layout.addWidget(section_label)
+        layout.setSpacing(14)
+        layout.addWidget(IconManager.label("Create User", "user", "sectionLabel"))
 
-        self.form_mode_label = QLabel("New user")
-        self.form_mode_label.setObjectName("helperLabel")
-        layout.addWidget(self.form_mode_label)
-        
-        form_layout = QVBoxLayout()
-        form_layout.setSpacing(12)
-        
-        # Email
-        username_label = QLabel("Email")
-        username_label.setObjectName("formLabel")
-        self.username_input = QLineEdit()
-        self.username_input.setPlaceholderText("Enter email")
-        
-        form_layout.addWidget(username_label)
-        form_layout.addWidget(self.username_input)
-        
-        # Full name
-        fullname_label = QLabel("Full Name")
-        fullname_label.setObjectName("formLabel")
+        self.create_hint_label = QLabel("Create a new store employee account.")
+        self.create_hint_label.setObjectName("helperLabel")
+        self.create_hint_label.setWordWrap(True)
+        layout.addWidget(self.create_hint_label)
+
+        self.email_input = QLineEdit()
+        self.email_input.setPlaceholderText("Enter email")
         self.fullname_input = QLineEdit()
         self.fullname_input.setPlaceholderText("Enter full name")
-        
-        form_layout.addWidget(fullname_label)
-        form_layout.addWidget(self.fullname_input)
-        
-        # Role
-        role_label = QLabel("Role")
-        role_label.setObjectName("formLabel")
         self.role_combo = QComboBox()
-        self.role_combo.setPlaceholderText("Select role")
-        
-        form_layout.addWidget(role_label)
-        form_layout.addWidget(self.role_combo)
-        
-        # Password
-        password_label = QLabel("Password")
-        password_label.setObjectName("formLabel")
-        self.password_label = password_label
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Required for new user")
+        self.password_input.setPlaceholderText("Password")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        
-        form_layout.addWidget(password_label)
-        form_layout.addWidget(self.password_input)
-        
-        layout.addLayout(form_layout)
-        
-        # Buttons
-        button_layout = QVBoxLayout()
-        button_layout.setSpacing(10)
-        
-        self.add_button = QPushButton("Add User")
+        self.confirm_password_input = QLineEdit()
+        self.confirm_password_input.setPlaceholderText("Confirm password")
+        self.confirm_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+
+        for label_text, widget in (
+            ("Email", self.email_input),
+            ("Full Name", self.fullname_input),
+            ("Role", self.role_combo),
+            ("Password", self.password_input),
+            ("Confirm Password", self.confirm_password_input),
+        ):
+            label = QLabel(label_text)
+            label.setObjectName("formLabel")
+            layout.addWidget(label)
+            layout.addWidget(widget)
+
+        self.add_button = QPushButton("Create User")
         IconManager.apply_button(self.add_button, "add", IconManager.LIGHT)
         self.add_button.setObjectName("primaryButton")
         self.add_button.clicked.connect(self.add_user_action)
-        
-        self.update_button = QPushButton("Update User")
-        IconManager.apply_button(self.update_button, "edit", IconManager.LIGHT)
-        self.update_button.setObjectName("secondaryButton")
-        self.update_button.clicked.connect(self.update_user_action)
+        layout.addWidget(self.add_button)
 
         self.clear_button = QPushButton("Clear")
-        IconManager.apply_button(self.clear_button, "clear", IconManager.LIGHT)
+        IconManager.apply_button(self.clear_button, "clear", IconManager.DARK)
         self.clear_button.setObjectName("neutralButton")
-        self.clear_button.clicked.connect(self.clear_form)
-        
-        button_layout.addWidget(self.add_button)
-        button_layout.addWidget(self.update_button)
-        button_layout.addWidget(self.clear_button)
-        
-        layout.addLayout(button_layout)
-        layout.addStretch()
-
-        self.delete_button = QPushButton("Deactivate User")
-        IconManager.apply_button(self.delete_button, "delete", IconManager.LIGHT)
-        self.delete_button.setObjectName("dangerButton")
-        self.delete_button.clicked.connect(self.delete_user_action)
-        layout.addWidget(self.delete_button)
-        
+        self.clear_button.clicked.connect(self.clear_create_form)
+        layout.addWidget(self.clear_button)
+        layout.addStretch(1)
         return panel
 
     def create_table_panel(self) -> QWidget:
         panel = QFrame()
         panel.setObjectName("panel")
-        
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
-        
-        section_label = IconManager.label("Users", "users", "sectionLabel")
-        layout.addWidget(section_label)
-        
-        # Search
+        layout.addWidget(IconManager.label("Users", "users", "sectionLabel"))
+
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search users...")
         self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self.load_users)
         layout.addWidget(self.search_input)
-        
-        # Table
+
         self.users_table = QTableWidget()
-        self.users_table.setColumnCount(5)
-        self.users_table.setHorizontalHeaderLabels(
-            ["Email", "Full Name", "Role", "Status", "Created"]
-        )
+        self.users_table.setColumnCount(6)
+        self.users_table.setHorizontalHeaderLabels(["Email", "Full Name", "Role", "Status", "Created", "Actions"])
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.users_table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         self.users_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.users_table.setAlternatingRowColors(True)
         self.users_table.setShowGrid(False)
         self.users_table.verticalHeader().setVisible(False)
-        
+
         header = self.users_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setMinimumSectionSize(82)
+        
+        # Cột 0 (Email) tự co giãn, cột 5 (Actions) tự ôm nội dung nút
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
         
-        self.users_table.setColumnWidth(0, 220)
-        self.users_table.verticalHeader().setDefaultSectionSize(42)
-        
-        self.users_table.itemSelectionChanged.connect(self.load_selected_user)
-        
+        self.users_table.setColumnWidth(1, 160)
+        self.users_table.verticalHeader().setDefaultSectionSize(52)
         layout.addWidget(self.users_table, 1)
 
         self.status_label = QLabel("")
         self.status_label.setObjectName("statusLabel")
         layout.addWidget(self.status_label)
-        
         return panel
 
-    def load_users(self) -> None:
-        keyword = self.search_input.text().strip()
-        all_users = get_all_users()
-        users = all_users
-        
-        if keyword:
-            users = [
-                u for u in users
-                if keyword.lower() in str(u["email"] or u["username"]).lower()
-                or keyword.lower() in str(u["full_name"]).lower()
-                or keyword.lower() in str(u["role_name"] or "").lower()
-                or keyword.lower() in ("active" if u["active"] else "inactive")
-            ]
-        
-        self.users_table.setRowCount(len(users))
-        for row_index, user in enumerate(users):
-            status = "Active" if user["active"] else "Inactive"
-            values = (
-                user["email"] or user["username"] or "",
-                user["full_name"] or "",
-                user["role_name"] or "None",
-                status,
-                str(user["created_at"] or "")[:19],
-            )
+    def create_toast_label(self) -> None:
+        self.toast_label = QLabel(self)
+        self.toast_label.setObjectName("userToast")
+        self.toast_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.toast_label.setWordWrap(True)
+        self.toast_label.hide()
 
+    def load_roles(self) -> None:
+        selected_role_id = self.role_combo.currentData() if hasattr(self, "role_combo") else None
+        self.roles = get_all_roles()
+        self.role_combo.clear()
+        for role in self.roles:
+            role_id = int(row_value(role, "id") or 0)
+            self.role_combo.addItem(str(row_value(role, "name") or ""), role_id)
+            if selected_role_id == role_id:
+                self.role_combo.setCurrentIndex(self.role_combo.count() - 1)
+        if selected_role_id is None:
+            self.role_combo.setCurrentIndex(-1)
+
+    def load_users(self) -> None:
+        keyword = self.search_input.text().strip().lower()
+        all_users = get_all_users()
+        users = [
+            user for user in all_users
+            if not keyword
+            or keyword in str(row_value(user, "email") or row_value(user, "username") or "").lower()
+            or keyword in str(row_value(user, "full_name") or "").lower()
+            or keyword in str(row_value(user, "role_name") or "").lower()
+            or keyword in ("active" if row_value(user, "active") else "inactive")
+        ]
+
+        self.users_table.setRowCount(len(users))
+        highlighted_row = -1
+        for row_index, user in enumerate(users):
+            status = "Active" if row_value(user, "active") else "Inactive"
+            values = (
+                row_value(user, "email") or row_value(user, "username") or "",
+                row_value(user, "full_name") or "",
+                row_value(user, "role_name") or "None",
+                status,
+                str(row_value(user, "created_at") or "")[:19],
+            )
+            highlighted = self.user_matches_highlight(user)
+            if highlighted:
+                highlighted_row = row_index
             for column_index, value in enumerate(values):
-                alignment = (
-                    Qt.AlignmentFlag.AlignCenter
-                    if column_index in {2, 3}
-                    else Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+                alignment = Qt.AlignmentFlag.AlignCenter if column_index in {2, 3} else (
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
                 )
-                table_item = self.make_table_item(str(value), alignment)
+                item = self.make_table_item(str(value), alignment)
                 if column_index == 0:
-                    table_item.setData(Qt.ItemDataRole.UserRole, int(user["id"]))
+                    item.setData(Qt.ItemDataRole.UserRole, int(row_value(user, "id")))
                 if column_index == 3:
-                    table_item.setForeground(QColor("#0F766E" if user["active"] else "#B91C1C"))
-                self.users_table.setItem(row_index, column_index, table_item)
+                    item.setForeground(QColor("#0F766E" if row_value(user, "active") else "#B91C1C"))
+                if highlighted:
+                    item.setBackground(QColor("#DBEAFE"))
+                self.users_table.setItem(row_index, column_index, item)
+            self.users_table.setCellWidget(row_index, 5, self.create_actions_widget(user))
+
+        if highlighted_row >= 0:
+            first_item = self.users_table.item(highlighted_row, 0)
+            if first_item is not None:
+                self.users_table.scrollToItem(first_item)
 
         if keyword and not users:
             self.set_status(f"No users match '{keyword}'.")
@@ -277,174 +457,276 @@ class UserManagementWindow(QWidget):
             suffix = "user" if len(users) == 1 else "users"
             self.set_status(f"{len(users)} {suffix} shown.")
 
-    def make_table_item(self, value: str, alignment: Qt.AlignmentFlag) -> QTableWidgetItem:
-        table_item = QTableWidgetItem(value)
-        table_item.setTextAlignment(alignment)
-        return table_item
+    def create_actions_widget(self, user: Any) -> QWidget:
+        row = QWidget()
+        row.setObjectName("actionsCell")
+        
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(12, 4, 12, 4) # Tạo lề an toàn 2 bên (trái, phải) cho đẹp
+        layout.setSpacing(8) # Khoảng cách tự nhiên giữa 3 nút
 
-    def load_roles(self) -> None:
-        roles = get_all_roles()
-        self.role_combo.clear()
-        for role in roles:
-            self.role_combo.addItem(role["name"], role["id"])
+        edit_button = self.icon_action_button("Edit user", "edit", "editIconButton")
+        edit_button.clicked.connect(lambda _checked=False, u=user: self.open_edit_dialog(u))
+        
+        active = bool(row_value(user, "active"))
+        toggle_button = StatusToggle(active)
+        toggle_button.setToolTip("Disable user" if active else "Enable user")
+        toggle_button.clicked.connect(lambda _checked=False, u=user: self.toggle_user_active(u))
+        
+        delete_button = self.icon_action_button("Delete user", "delete", "deleteIconButton")
+        delete_button.clicked.connect(lambda _checked=False, u=user: self.soft_delete_user_action(u))
+
+        layout.addWidget(edit_button)
+        layout.addWidget(toggle_button)
+        layout.addWidget(delete_button)
+        
+        return row
+
+    def icon_action_button(self, tooltip: str, icon_key: str, object_name: str) -> QPushButton:
+        button = QPushButton()
+        button.setObjectName(object_name)
+        button.setFixedSize(32, 30)
+        button.setToolTip(tooltip)
+        icon_color = "#DC2626" if object_name == "deleteIconButton" else "#0F766E"
+        button.setIcon(IconManager.icon(icon_key, icon_color))
+        button.setIconSize(QSize(15, 15))
+        return button
+
+    def make_table_item(self, value: str, alignment: Qt.AlignmentFlag) -> QTableWidgetItem:
+        item = QTableWidgetItem(value)
+        item.setTextAlignment(alignment)
+        return item
 
     def reload_data(self) -> None:
-        self.load_roles()
         self.load_users()
 
     def refresh_users_from_cloud(self) -> None:
+        self.set_status("Refreshing users...")
         try:
             refresh_store_users_from_cloud()
         except Exception as error:
             self.set_status(f"Could not refresh users: {error}", is_error=True)
+            self.show_toast(f"Could not refresh users: {error}", is_error=True)
             return
         self.load_users()
         self.set_status("Users updated.")
+        self.show_toast("Users updated.")
 
     def request_user_sync(self, force: bool = False) -> None:
         now = monotonic()
         if not force and now - self.last_sync_request_at < 60:
             return
         self.last_sync_request_at = now
+        self.set_status("Refreshing users...")
         self.sync_requested.emit({"users"})
 
+    def add_user_action(self) -> None:
+        email = self.email_input.text().strip()
+        full_name = self.fullname_input.text().strip()
+        password = self.password_input.text()
+        confirm_password = self.confirm_password_input.text()
+        role_id = self.role_combo.currentData()
+
+        if not email or not full_name or not password or not confirm_password:
+            self.set_status("Please fill email, full name, password, and confirm password.", is_error=True)
+            return
+        if password != confirm_password:
+            self.set_status("Password confirmation does not match.", is_error=True)
+            return
+        if role_id is None:
+            self.set_status("Please select a role.", is_error=True)
+            return
+
+        def task() -> dict[str, object]:
+            user_id = add_user(email, password, full_name, int(role_id))
+            log_audit(self.current_user["id"], "CREATE_USER", "users", user_id, None, f"email: {email}")
+            refresh_store_users_from_cloud()
+            return {"user_id": user_id, "email": email}
+
+        self.run_user_action(
+            action="create",
+            message="Creating user...",
+            task=task,
+            success_message=f"User created: {email}",
+            on_success=lambda result: self.after_user_changed(result, clear_create=True),
+        )
+
+    def open_edit_dialog(self, user: Any) -> None:
+        def save_callback(data: dict[str, Any]) -> dict[str, object]:
+            password = str(data["password"] or "") or None
+            update_user(
+                int(data["user_id"]),
+                str(data["email"]),
+                str(data["full_name"]),
+                int(data["role_id"]),
+                password,
+            )
+            log_audit(self.current_user["id"], "UPDATE_USER", "users", int(data["user_id"]), None, f"email: {data['email']}")
+            refresh_store_users_from_cloud()
+            return {"user_id": int(data["user_id"]), "email": str(data["email"])}
+
+        dialog = UserEditDialog(user, self.roles or get_all_roles(), save_callback, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.result_payload is not None:
+            self.after_user_changed(dialog.result_payload, clear_create=False)
+            self.set_status("User updated.")
+            self.show_toast(f"User updated: {dialog.result_payload.get('email')}")
+
+    def toggle_user_active(self, user: Any) -> None:
+        user_id = int(row_value(user, "id"))
+        email = str(row_value(user, "email") or row_value(user, "username") or "")
+        make_active = not bool(row_value(user, "active"))
+        verb = "Enabling" if make_active else "Disabling"
+
+        def task() -> dict[str, object]:
+            set_user_active(user_id, make_active, int(self.current_user["id"]))
+            log_audit(
+                self.current_user["id"],
+                "ENABLE_USER" if make_active else "DISABLE_USER",
+                "users",
+                user_id,
+                None,
+                f"email: {email}",
+            )
+            refresh_store_users_from_cloud()
+            return {"user_id": user_id, "email": email}
+
+        self.run_user_action(
+            action="toggle",
+            message=f"{verb} user...",
+            task=task,
+            success_message=f"User {'enabled' if make_active else 'disabled'}: {email}",
+            on_success=lambda result: self.after_user_changed(result, clear_create=False),
+        )
+
+    def soft_delete_user_action(self, user: Any) -> None:
+        user_id = int(row_value(user, "id"))
+        email = str(row_value(user, "email") or row_value(user, "username") or "")
+        if not confirm_delete(self, "Delete this user? Sales history and audit records will be kept."):
+            return
+
+        def task() -> dict[str, object]:
+            soft_delete_user(user_id, int(self.current_user["id"]))
+            log_audit(self.current_user["id"], "DELETE_USER", "users", user_id, None, f"email: {email}")
+            refresh_store_users_from_cloud()
+            return {"user_id": user_id, "email": email}
+
+        self.run_user_action(
+            action="delete",
+            message="Deleting user...",
+            task=task,
+            success_message=f"User deleted: {email}",
+            on_success=lambda result: self.after_user_changed(result, clear_create=False),
+        )
+
+    def run_user_action(
+        self,
+        action: str,
+        message: str,
+        task: Callable[[], dict[str, object]],
+        success_message: str,
+        on_success: Callable[[dict[str, object]], None],
+    ) -> None:
+        def handle_success(result: dict[str, object]) -> None:
+            self.set_user_action_busy(None)
+            on_success(result)
+            self.set_status(success_message)
+            self.show_toast(success_message)
+
+        def handle_error(error: Exception) -> None:
+            self.set_user_action_busy(None)
+            if action != "create":
+                self.load_users()
+            self.set_status(str(error), is_error=True)
+            self.show_toast(str(error), is_error=True)
+
+        self.set_status(message)
+        self.set_user_action_busy(action)
+        started = self.user_sync_runner.start(
+            task,
+            message,
+            on_success=handle_success,
+            on_error=handle_error,
+            timeout_message=f"{message.rstrip('.')} is taking too long. Please check the network and try again.",
+        )
+        if not started:
+            self.set_user_action_busy(None)
+            self.set_status("A user sync task is already running.", is_error=True)
+
+    def after_user_changed(self, result: dict[str, object], clear_create: bool) -> None:
+        self.highlight_user_id = int(result.get("user_id") or 0) or None
+        self.highlight_user_email = str(result.get("email") or "")
+        if clear_create:
+            self.clear_create_form()
+        self.load_users()
+        self.data_changed.emit()
+        self.sync_requested.emit({"users"})
+        self.clear_highlight_later()
+
+    def set_user_action_busy(self, action: str | None) -> None:
+        busy = action is not None
+        self.email_input.setEnabled(not busy)
+        self.fullname_input.setEnabled(not busy)
+        self.role_combo.setEnabled(not busy)
+        self.password_input.setEnabled(not busy)
+        self.confirm_password_input.setEnabled(not busy)
+        self.clear_button.setEnabled(not busy)
+        self.users_table.setEnabled(not busy)
+        self.search_input.setEnabled(not busy)
+        self.add_button.setEnabled(not busy)
+        self.add_button.setText("Creating..." if action == "create" else "Create User")
+
+    def clear_create_form(self) -> None:
+        self.email_input.clear()
+        self.fullname_input.clear()
+        self.password_input.clear()
+        self.confirm_password_input.clear()
+        self.role_combo.setCurrentIndex(-1)
+        self.email_input.setFocus()
+
     def set_status(self, message: str, is_error: bool = False) -> None:
-        self.last_status_message = message
         self.status_label.setText(message)
         self.status_label.setProperty("error", is_error)
         self.status_label.style().unpolish(self.status_label)
         self.status_label.style().polish(self.status_label)
 
-    def update_form_mode(self) -> None:
-        editing = self.selected_user_id is not None
-        self.form_mode_label.setText(
-            "Editing selected user. Leave password blank to keep it unchanged."
-            if editing
-            else "Create a new store user."
-        )
-        self.password_label.setText("New Password" if editing else "Password")
-        self.password_input.setPlaceholderText(
-            "Leave blank to keep current" if editing else "Required for new user"
-        )
-        self.add_button.setEnabled(not editing)
-        self.update_button.setEnabled(editing)
-        self.delete_button.setEnabled(editing)
+    def show_toast(self, message: str, is_error: bool = False) -> None:
+        self.toast_label.setText(message)
+        self.toast_label.setProperty("error", is_error)
+        self.toast_label.style().unpolish(self.toast_label)
+        self.toast_label.style().polish(self.toast_label)
+        self.toast_label.adjustSize()
+        self.toast_label.setFixedWidth(min(max(self.toast_label.width() + 26, 260), 440))
+        self.position_toast()
+        self.toast_label.show()
+        self.toast_label.raise_()
+        QTimer.singleShot(3000, self.toast_label.hide)
 
-    def load_selected_user(self) -> None:
-        selected_row = self.users_table.currentRow()
-        if selected_row < 0:
+    def position_toast(self) -> None:
+        if not hasattr(self, "toast_label"):
             return
+        margin = 24
+        self.toast_label.adjustSize()
+        self.toast_label.move(max(margin, self.width() - self.toast_label.width() - margin), margin)
 
-        id_item = self.users_table.item(selected_row, 0)
-        if id_item is None:
-            return
-        self.selected_user_id = int(id_item.data(Qt.ItemDataRole.UserRole))
-        
-        users = get_all_users()
-        user = next((u for u in users if u["id"] == self.selected_user_id), None)
-        
-        if user:
-            self.username_input.setText(user["email"] or user["username"])
-            self.fullname_input.setText(user["full_name"])
-            self.role_combo.setCurrentText(user["role_name"] or "")
-            self.password_input.clear()
-            self.update_form_mode()
+    def user_matches_highlight(self, user: Any) -> bool:
+        if self.highlight_user_id is not None:
+            try:
+                if int(row_value(user, "id")) == self.highlight_user_id:
+                    return True
+            except (TypeError, ValueError):
+                pass
+        email = str(row_value(user, "email") or row_value(user, "username") or "").strip().lower()
+        return bool(self.highlight_user_email and email == self.highlight_user_email.lower())
 
-    def add_user_action(self) -> None:
-        email = self.username_input.text().strip()
-        full_name = self.fullname_input.text().strip()
-        password = self.password_input.text()
-        role_id = self.role_combo.currentData()
-        
-        if not email or not full_name or not password:
-            self.set_status("Please fill email, full name, and password.", is_error=True)
+    def clear_highlight_later(self) -> None:
+        QTimer.singleShot(3500, self.clear_highlight)
+
+    def clear_highlight(self) -> None:
+        if self.highlight_user_id is None and not self.highlight_user_email:
             return
-        
-        if role_id is None:
-            self.set_status("Please select a role.", is_error=True)
-            return
-        
-        try:
-            user_id = add_user(email, password, full_name, role_id)
-            log_audit(self.current_user["id"], "CREATE_USER", "users", user_id, None, f"email: {email}")
-        except Exception as e:
-            self.set_status(str(e), is_error=True)
-            return
-        
-        self.clear_form()
+        self.highlight_user_id = None
+        self.highlight_user_email = ""
         self.load_users()
-        self.data_changed.emit()
-        self.sync_requested.emit({"users"})
-        self.set_status("User added.")
-
-    def update_user_action(self) -> None:
-        if self.selected_user_id is None:
-            self.set_status("Select a user to update.", is_error=True)
-            return
-        
-        email = self.username_input.text().strip()
-        full_name = self.fullname_input.text().strip()
-        password = self.password_input.text() or None
-        role_id = self.role_combo.currentData()
-        
-        if not email or not full_name:
-            self.set_status("Please fill email and full name.", is_error=True)
-            return
-        
-        if role_id is None:
-            self.set_status("Please select a role.", is_error=True)
-            return
-        
-        try:
-            update_user(self.selected_user_id, email, full_name, role_id, password)
-            log_audit(self.current_user["id"], "UPDATE_USER", "users", self.selected_user_id, None, f"email: {email}")
-        except Exception as e:
-            self.set_status(str(e), is_error=True)
-            return
-        
-        self.clear_form()
-        self.load_users()
-        self.data_changed.emit()
-        self.sync_requested.emit({"users"})
-        self.set_status("User updated.")
-
-    def delete_user_action(self) -> None:
-        if self.selected_user_id is None:
-            self.set_status("Select a user to deactivate.", is_error=True)
-            return
-        
-        if not confirm_delete(
-            self,
-            "Deactivate this user? Their sales history and audit records will be kept.",
-        ):
-            return
-        
-        try:
-            delete_user(self.selected_user_id, self.current_user["id"])
-            log_audit(self.current_user["id"], "DELETE_USER", "users", self.selected_user_id)
-        except Exception as e:
-            self.set_status(str(e), is_error=True)
-            return
-        
-        self.clear_form()
-        self.load_users()
-        self.data_changed.emit()
-        self.sync_requested.emit({"users"})
-        self.set_status("User deactivated.")
-
-    def clear_form(self) -> None:
-        self.selected_user_id = None
-        self.users_table.blockSignals(True)
-        self.users_table.clearSelection()
-        self.users_table.setCurrentCell(-1, -1)
-        self.users_table.blockSignals(False)
-        
-        self.username_input.clear()
-        self.fullname_input.clear()
-        self.password_input.clear()
-        self.role_combo.setCurrentIndex(-1)
-        self.update_form_mode()
-        self.username_input.setFocus()
 
     def apply_styles(self) -> None:
         self.setStyleSheet(
@@ -455,92 +737,94 @@ class UserManagementWindow(QWidget):
                 font-family: "Segoe UI";
                 font-size: 13px;
             }
-
             #titleLabel {
                 color: #17212B;
                 font-size: 24px;
+                font-weight: 800;
+            }
+            #subtitleLabel, #helperLabel, #statusLabel, #formLabel {
+                color: #64707D;
+                font-size: 12px;
                 font-weight: 700;
             }
-
-            #subtitleLabel {
-                color: #64707D;
-                font-size: 13px;
-            }
-
             #sectionLabel {
                 color: #25313D;
                 font-size: 15px;
-                font-weight: 700;
+                font-weight: 800;
             }
-
             #panel {
                 background: #FFFFFF;
                 border: 1px solid #D8E0E8;
                 border-radius: 10px;
             }
-
-            #formLabel {
-                color: #64707D;
-                font-size: 12px;
-                font-weight: 600;
-            }
-
-            #helperLabel, #statusLabel {
-                color: #64707D;
-                font-size: 12px;
-                font-weight: 600;
-            }
-
             #statusLabel[error="true"] {
                 color: #B91C1C;
             }
-
+            #userToast {
+                background: #ECFDF5;
+                border: 1px solid #A7F3D0;
+                border-radius: 8px;
+                color: #047857;
+                font-size: 13px;
+                font-weight: 800;
+                padding: 10px 14px;
+            }
+            #userToast[error="true"] {
+                background: #FEF2F2;
+                border: 1px solid #FECACA;
+                color: #B91C1C;
+            }
             QLineEdit, QComboBox {
                 background: #FFFFFF;
                 border: 1px solid #C9D3DE;
                 border-radius: 8px;
                 padding: 10px 12px;
             }
-
-            QLineEdit:focus, QComboBox:focus {
-                border: 1px solid #2563EB;
-            }
-
             QPushButton {
                 border: none;
                 border-radius: 8px;
                 color: #FFFFFF;
-                font-weight: 700;
-                padding: 12px 14px;
+                font-weight: 800;
+                padding: 9px 12px;
             }
-
             #primaryButton {
                 background: #2563EB;
             }
-
             #secondaryButton {
                 background: #0F766E;
             }
-
             #dangerButton {
                 background: #DC2626;
             }
-            
             #neutralButton {
                 background: #E2E8F0;
                 color: #17212B;
             }
-
+            #editIconButton, #deleteIconButton {
+                background: #F8FAFC;
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                padding: 0;
+            }
+            #editIconButton:hover {
+                background: #E0F2FE;
+                border-color: #7DD3FC;
+            }
+            #deleteIconButton {
+                background: #FEF2F2;
+                border-color: #FECACA;
+            }
+            #deleteIconButton:hover {
+                background: #FEE2E2;
+                border-color: #FCA5A5;
+            }
+            #actionsCell {
+                background: transparent;
+            }
             QPushButton:disabled {
                 background: #CBD5E1;
                 color: #64748B;
             }
-
-            QPushButton:pressed {
-                padding-top: 13px;
-                padding-bottom: 11px;
-            }
-
             QTableWidget {
                 background: #FFFFFF;
                 border: 1px solid #D8E0E8;
@@ -548,16 +832,14 @@ class UserManagementWindow(QWidget):
                 alternate-background-color: #F7F9FB;
                 gridline-color: transparent;
             }
-
             QHeaderView::section {
                 background: #F0F4F8;
                 border: none;
                 border-bottom: 1px solid #D8E0E8;
                 color: #25313D;
-                font-weight: 700;
+                font-weight: 800;
                 padding: 10px;
             }
-
             QTableWidget::item {
                 border-bottom: 1px solid #EDF1F5;
                 padding: 8px;
@@ -570,7 +852,10 @@ class UserManagementWindow(QWidget):
         self.apply_styles()
         QTimer.singleShot(0, self.request_user_sync)
 
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.position_toast()
+
 
 def create_user_management(current_user: dict) -> UserManagementWindow:
-    window = UserManagementWindow(current_user)
-    return window
+    return UserManagementWindow(current_user)

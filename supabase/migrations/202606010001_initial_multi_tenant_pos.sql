@@ -30,6 +30,7 @@ create table public.profiles (
     full_name text not null check (btrim(full_name) <> ''),
     role_id bigint not null references public.roles(id),
     active boolean not null default true,
+    deleted_at timestamptz,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );

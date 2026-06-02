@@ -31,6 +31,7 @@ class RealtimeSyncWorker(QObject):
             self.status.emit(f"Realtime sync stopped: {error}")
         finally:
             try:
+                self._cancel_pending_tasks()
                 self._loop.close()
             finally:
                 self._loop = None
@@ -134,10 +135,27 @@ class RealtimeSyncWorker(QObject):
                 was_connected = connected
         finally:
             try:
-                await channel.unsubscribe()
-            except Exception:
-                pass
-            try:
                 await client.remove_channel(channel)
             except Exception:
+                try:
+                    await channel.unsubscribe()
+                except Exception:
+                    pass
+            try:
+                await client.realtime.close()
+            except Exception:
                 pass
+
+    def _cancel_pending_tasks(self) -> None:
+        loop = self._loop
+        if loop is None or loop.is_closed():
+            return
+
+        pending_tasks = [task for task in asyncio.all_tasks(loop) if not task.done()]
+        if not pending_tasks:
+            return
+
+        for task in pending_tasks:
+            task.cancel()
+        loop.run_until_complete(asyncio.gather(*pending_tasks, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
