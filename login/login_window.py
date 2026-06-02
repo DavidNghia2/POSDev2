@@ -2,21 +2,19 @@ import sqlite3
 import hashlib
 from typing import Any
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QEvent, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QFrame,
     QGraphicsDropShadowEffect,
-    QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListView,
     QMessageBox,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -350,7 +348,7 @@ def ensure_local_role(connection: sqlite3.Connection, role_name: str, permission
     return int(cursor.lastrowid)
 
 
-def sync_profile_to_local(profile: dict[str, Any]) -> dict[str, Any]:
+def sync_profile_to_local(profile: dict[str, Any], update_current_store: bool = True) -> dict[str, Any]:
     init_auth_db()
     store_id = str(profile.get("store_id") or DEFAULT_LOCAL_STORE_ID)
     store_name = str(profile.get("store_name") or "Store")
@@ -424,13 +422,14 @@ def sync_profile_to_local(profile: dict[str, Any]) -> dict[str, Any]:
                 (email, email, full_name, role_id, active, cloud_auth_id or None, store_id, user_id),
             )
 
-        connection.execute(
-            """
-            INSERT OR REPLACE INTO settings (key, value, store_id, updated_at)
-            VALUES ('current_store_id', ?, NULL, CURRENT_TIMESTAMP)
-            """,
-            (store_id,),
-        )
+        if update_current_store:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO settings (key, value, store_id, updated_at)
+                VALUES ('current_store_id', ?, NULL, CURRENT_TIMESTAMP)
+                """,
+                (store_id,),
+            )
         connection.commit()
 
     with get_connection() as connection:
@@ -450,6 +449,11 @@ def sync_profile_to_local(profile: dict[str, Any]) -> dict[str, Any]:
 
 
 def sync_store_data_from_cloud() -> None:
+    try:
+        refresh_store_users_from_cloud()
+    except Exception as error:
+        print(f"Cloud user sync skipped: {error}")
+
     try:
         pull_registers_from_cloud()
     except Exception as error:
@@ -476,8 +480,11 @@ def register_store_owner(store_name: str, full_name: str, email: str, password: 
 
 
 def refresh_store_users_from_cloud() -> None:
+    current_store_id = get_current_store_id()
     for profile in cloud_auth.list_store_users():
-        sync_profile_to_local(profile)
+        if str(profile.get("store_id") or "") != current_store_id:
+            continue
+        sync_profile_to_local(profile, update_current_store=False)
 
 
 def get_all_users() -> list[sqlite3.Row]:
@@ -486,10 +493,12 @@ def get_all_users() -> list[sqlite3.Row]:
         store_id = current_store_id_from_connection(connection)
         cursor = connection.execute(
             """
-            SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id, u.full_name,
-                   r.name as role_name, u.active, u.created_at
+            SELECT u.id, u.username, u.email, u.cloud_auth_id, u.store_id,
+                   s.name as store_name, u.full_name, r.name as role_name,
+                   u.active, u.created_at, u.last_synced_at
             FROM users u
             LEFT JOIN roles r ON u.role_id = r.id
+            LEFT JOIN stores s ON s.id = u.store_id
             WHERE u.store_id = ?
             ORDER BY u.id DESC
             """,
@@ -1157,22 +1166,6 @@ class ToggleSwitch(QPushButton):
             painter.drawLine(36, 10, 30, 16)
 
 
-class RoleComboBox(QComboBox):
-    """Combo box with a light popup container that matches the login form."""
-
-    def showPopup(self) -> None:
-        super().showPopup()
-        popup_container = self.view().parentWidget()
-        if popup_container is not None:
-            popup_container.setStyleSheet(
-                """
-                background: #FFFFFF;
-                border: 1px solid #DCE5F0;
-                border-radius: 8px;
-                """
-            )
-
-
 class LoginWindow(QDialog):
     def __init__(self) -> None:
         super().__init__()
@@ -1183,8 +1176,7 @@ class LoginWindow(QDialog):
     def init_ui(self) -> None:
         self.setWindowTitle("Retail POS - Sign In")
         apply_app_icon(self)
-        self.setFixedSize(1040, 700)
-        self.setModal(True)
+        self.setFixedSize(1040, 720) # Tăng nhẹ chiều cao cửa sổ lên 720 để bố cục thông thoáng
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(44, 44, 44, 44)
@@ -1199,7 +1191,7 @@ class LoginWindow(QDialog):
         root_layout.addWidget(tablet)
 
         tablet_layout = QVBoxLayout(tablet)
-        tablet_layout.setContentsMargins(82, 58, 62, 38)
+        tablet_layout.setContentsMargins(82, 48, 62, 38) # Giảm lề trên một chút để đẩy giao diện lên trên
         tablet_layout.setSpacing(18)
 
         heading = QHBoxLayout()
@@ -1236,7 +1228,7 @@ class LoginWindow(QDialog):
 
         login_card = QFrame()
         login_card.setObjectName("loginCard")
-        login_card.setFixedSize(360, 500)
+        login_card.setFixedSize(380, 580) # SỬA: Tăng chiều cao login_card từ 540 lên 580
         card_shadow = QGraphicsDropShadowEffect(login_card)
         card_shadow.setBlurRadius(34)
         card_shadow.setOffset(0, 16)
@@ -1244,45 +1236,41 @@ class LoginWindow(QDialog):
         login_card.setGraphicsEffect(card_shadow)
 
         card_layout = QVBoxLayout(login_card)
-        card_layout.setContentsMargins(34, 32, 34, 26)
-        card_layout.setSpacing(11)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+
+        self.auth_stack = QStackedWidget()
+        self.auth_stack.setObjectName("authStack")
+        self.auth_stack.addWidget(self.create_login_view())
+        self.auth_stack.addWidget(self.create_register_view())
+        card_layout.addWidget(self.auth_stack, 1)
+
+        content.addWidget(login_card, 0, Qt.AlignmentFlag.AlignVCenter)
+        content.addWidget(PosIllustration(), 1, Qt.AlignmentFlag.AlignBottom)
+
+        self.apply_styles()
+
+    def create_login_view(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(34, 34, 34, 34)
+        layout.setSpacing(11)
 
         login_title = IconManager.label("Login", "login", "loginTitle", icon_size=22)
-        card_layout.addWidget(login_title)
-        card_layout.addSpacing(10)
+        layout.addWidget(login_title)
+        layout.addSpacing(10)
 
-        username_row = QFrame()
-        username_row.setObjectName("inputRow")
-        username_row.setFixedHeight(48)
-        username_layout = QHBoxLayout(username_row)
-        username_layout.setContentsMargins(14, 0, 14, 0)
-        username_layout.setSpacing(10)
-        username_icon = self.create_inline_icon_label("user")
-        username_separator = QFrame()
-        username_separator.setObjectName("iconSeparator")
-        username_separator.setFixedWidth(1)
         self.username_input = QLineEdit()
         self.username_input.setObjectName("cardInput")
         self.username_input.setPlaceholderText("Email")
-        username_layout.addWidget(username_icon)
-        username_layout.addWidget(username_separator)
-        username_layout.addWidget(self.username_input, 1)
+        layout.addWidget(self.create_auth_input_row("user", self.username_input))
 
-        password_row = QFrame()
-        password_row.setObjectName("inputRow")
-        password_row.setFixedHeight(48)
-        password_layout = QHBoxLayout(password_row)
-        password_layout.setContentsMargins(14, 0, 12, 0)
-        password_layout.setSpacing(10)
-        password_icon = self.create_inline_icon_label("lock")
-        password_separator = QFrame()
-        password_separator.setObjectName("iconSeparator")
-        password_separator.setFixedWidth(1)
         self.password_input = QLineEdit()
         self.password_input.setObjectName("cardInput")
         self.password_input.setPlaceholderText("Password")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.password_input.returnPressed.connect(self.handle_login)
+
         self.password_toggle_button = QPushButton()
         self.password_toggle_button.setObjectName("passwordToggleButton")
         self.password_toggle_button.setCheckable(True)
@@ -1290,18 +1278,8 @@ class LoginWindow(QDialog):
         IconManager.apply_button(self.password_toggle_button, "eye_off", size=18)
         self.password_toggle_button.setToolTip("Show password")
         self.password_toggle_button.clicked.connect(self.toggle_password_visibility)
-        password_layout.addWidget(password_icon)
-        password_layout.addWidget(password_separator)
-        password_layout.addWidget(self.password_input, 1)
-        password_layout.addWidget(
-            self.password_toggle_button,
-            0,
-            Qt.AlignmentFlag.AlignVCenter,
-        )
-
-        card_layout.addWidget(username_row)
-        card_layout.addWidget(password_row)
-        card_layout.addSpacing(4)
+        layout.addWidget(self.create_auth_input_row("lock", self.password_input, self.password_toggle_button))
+        layout.addSpacing(4)
 
         remember_layout = QHBoxLayout()
         remember_layout.setContentsMargins(0, 0, 0, 0)
@@ -1315,68 +1293,198 @@ class LoginWindow(QDialog):
         remember_layout.addWidget(remember_label)
         remember_layout.addWidget(self.remember_checkbox)
         remember_layout.addStretch()
-        card_layout.addLayout(remember_layout)
+        layout.addLayout(remember_layout)
 
         self.login_button = QPushButton("Log in")
         IconManager.apply_button(self.login_button, "login", IconManager.LIGHT)
         self.login_button.setObjectName("loginButton")
         self.login_button.setMinimumHeight(46)
         self.login_button.clicked.connect(self.handle_login)
-        card_layout.addSpacing(14)
-        card_layout.addWidget(self.login_button)
+        layout.addSpacing(14)
+        layout.addWidget(self.login_button)
 
         self.register_button = QPushButton("Register store")
         IconManager.apply_button(self.register_button, "add", IconManager.DARK)
         self.register_button.setObjectName("registerButton")
         self.register_button.setMinimumHeight(40)
-        self.register_button.clicked.connect(self.open_register_dialog)
-        card_layout.addWidget(self.register_button)
+        self.register_button.clicked.connect(lambda: self.set_auth_mode("register"))
+        layout.addWidget(self.register_button)
 
         self.error_label = QLabel("")
         self.error_label.setObjectName("errorLabel")
         self.error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.error_label.setMinimumHeight(20)
-        card_layout.addWidget(self.error_label)
-        card_layout.addStretch(1)
+        self.error_label.setWordWrap(True)
+        self.error_label.setMinimumHeight(32)
+        layout.addWidget(self.error_label)
+        layout.addStretch(1)
+        return page
 
-        content.addWidget(login_card, 0, Qt.AlignmentFlag.AlignVCenter)
-        content.addWidget(PosIllustration(), 1, Qt.AlignmentFlag.AlignBottom)
+    def create_register_view(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        # SỬA: Tối ưu lề trên và dưới xuống 24 để tạo thêm không gian thở theo chiều dọc
+        layout.setContentsMargins(34, 24, 34, 24)
+        layout.setSpacing(7)
 
-        self.apply_styles()
+        register_title = IconManager.label("Register Store", "store", "loginTitle", icon_size=22)
+        register_hint = QLabel("Create the first store owner account for a new store.")
+        register_hint.setObjectName("authHint")
+        register_hint.setWordWrap(True)
+        register_hint.setMaximumHeight(30)
+        layout.addWidget(register_title)
+        layout.addWidget(register_hint)
+        layout.addSpacing(2)
 
-    def load_roles(self) -> None:
-        self.role_combo.clear()
-        for role in get_all_roles():
-            self.role_combo.addItem(role["name"], role["id"])
+        self.register_store_input = QLineEdit()
+        self.register_store_input.setObjectName("cardInput")
+        self.register_store_input.setPlaceholderText("Store name")
+        layout.addWidget(self.create_auth_input_row("store", self.register_store_input, row_height=42))
 
-    def configure_role_popup(self) -> None:
-        visible_roles = min(max(self.role_combo.count(), 3), 6)
-        self.role_combo.setMaxVisibleItems(visible_roles)
-        popup_row_height = max(self.role_combo.view().sizeHintForRow(0), 34)
-        self.role_combo.view().setMinimumHeight((popup_row_height * visible_roles) + 14)
+        self.register_full_name_input = QLineEdit()
+        self.register_full_name_input.setObjectName("cardInput")
+        self.register_full_name_input.setPlaceholderText("Owner full name")
+        layout.addWidget(self.create_auth_input_row("user", self.register_full_name_input, row_height=42))
+
+        self.register_email_input = QLineEdit()
+        self.register_email_input.setObjectName("cardInput")
+        self.register_email_input.setPlaceholderText("Email")
+        layout.addWidget(self.create_auth_input_row("login", self.register_email_input, row_height=42))
+
+        self.register_password_input = QLineEdit()
+        self.register_password_input.setObjectName("cardInput")
+        self.register_password_input.setPlaceholderText("Password")
+        self.register_password_input.setEchoMode(QLineEdit.EchoMode.Password)
+        layout.addWidget(self.create_auth_input_row("lock", self.register_password_input, row_height=42))
+
+        self.register_confirm_input = QLineEdit()
+        self.register_confirm_input.setObjectName("cardInput")
+        self.register_confirm_input.setPlaceholderText("Confirm password")
+        self.register_confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+        self.register_confirm_input.returnPressed.connect(self.handle_register)
+        layout.addWidget(self.create_auth_input_row("confirm", self.register_confirm_input, row_height=42))
+
+        self.register_submit_button = QPushButton("Register")
+        IconManager.apply_button(self.register_submit_button, "add", IconManager.LIGHT)
+        self.register_submit_button.setObjectName("loginButton")
+        self.register_submit_button.setFixedHeight(42)
+        self.register_submit_button.clicked.connect(self.handle_register)
+        layout.addSpacing(4)
+        layout.addWidget(self.register_submit_button)
+
+        self.back_to_login_button = QPushButton("Back to login")
+        IconManager.apply_button(self.back_to_login_button, "sidebar_collapse", IconManager.DARK)
+        self.back_to_login_button.setObjectName("registerButton")
+        self.back_to_login_button.setFixedHeight(38)
+        self.back_to_login_button.clicked.connect(lambda: self.set_auth_mode("login"))
+        layout.addWidget(self.back_to_login_button)
+
+        self.register_error_label = QLabel("")
+        self.register_error_label.setObjectName("errorLabel")
+        self.register_error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.register_error_label.setWordWrap(True)
+        self.register_error_label.setMinimumHeight(24)
+        layout.addWidget(self.register_error_label)
+        layout.addStretch(1)
+        return page
 
     def create_inline_icon_label(self, icon_key: str) -> QLabel:
         label = QLabel()
         label.setPixmap(IconManager.pixmap(icon_key, 20))
-        label.setFixedSize(26, 26)
+        label.setFixedSize(22, 22)
+        label.setMaximumHeight(22)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         return label
 
-    def handle_login(self) -> None:
-        email = self.username_input.text().strip()
-        password = self.password_input.text()
-        
-        if not email or not password:
-            self.error_label.setText("Please enter email and password")
+    def create_auth_input_row(
+        self,
+        icon_key: str,
+        input_field: QLineEdit,
+        trailing_widget: QWidget | None = None,
+        row_height: int = 48,
+    ) -> QFrame:
+        row = QFrame()
+        row.setObjectName("inputRow")
+        row.setFixedHeight(row_height)
+        row.setProperty("focused", False)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(14, 0, 12 if trailing_widget is not None else 14, 0)
+        layout.setSpacing(10)
+
+        separator = QFrame()
+        separator.setObjectName("iconSeparator")
+        separator.setFixedWidth(1)
+        separator.setFixedHeight(22)
+        separator.setMaximumHeight(22)
+
+        input_field.setFrame(False)
+        input_field.setAttribute(Qt.WidgetAttribute.WA_MacShowFocusRect, False)
+        input_field._input_row = row
+        input_field.installEventFilter(self)
+
+        layout.addWidget(self.create_inline_icon_label(icon_key), 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(separator, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(input_field, 1, Qt.AlignmentFlag.AlignVCenter)
+        if trailing_widget is not None:
+            layout.addWidget(trailing_widget, 0, Qt.AlignmentFlag.AlignVCenter)
+        return row
+
+    def eventFilter(self, watched, event) -> bool:
+        input_row = getattr(watched, "_input_row", None)
+        if input_row is not None and event.type() in {
+            QEvent.Type.FocusIn,
+            QEvent.Type.FocusOut,
+        }:
+            input_row.setProperty("focused", event.type() == QEvent.Type.FocusIn)
+            input_row.style().unpolish(input_row)
+            input_row.style().polish(input_row)
+            input_row.update()
+        return super().eventFilter(watched, event)
+
+    def set_auth_mode(self, mode: str) -> None:
+        if mode == "register":
+            self.set_feedback(self.error_label, "")
+            self.auth_stack.setCurrentIndex(1)
+            self.register_store_input.setFocus()
             return
 
-        try:
-            self.current_user = login_with_supabase(email, password)
-        except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
-            self.error_label.setText(str(error))
-            self.password_input.clear()
-            return
+        self.set_feedback(self.register_error_label, "")
+        self.auth_stack.setCurrentIndex(0)
+        self.username_input.setFocus()
 
+    def set_feedback(self, label: QLabel, message: str, state: str = "error") -> None:
+        label.setProperty("feedback", state)
+        label.setText(message)
+        label.style().unpolish(label)
+        label.style().polish(label)
+
+    def set_login_busy(self, busy: bool) -> None:
+        for widget in (
+            self.username_input,
+            self.password_input,
+            self.password_toggle_button,
+            self.remember_checkbox,
+            self.register_button,
+        ):
+            widget.setEnabled(not busy)
+        self.login_button.setEnabled(not busy)
+        self.login_button.setText("Logging in..." if busy else "Log in")
+
+    def set_register_busy(self, busy: bool) -> None:
+        for widget in (
+            self.register_store_input,
+            self.register_full_name_input,
+            self.register_email_input,
+            self.register_password_input,
+            self.register_confirm_input,
+            self.back_to_login_button,
+        ):
+            widget.setEnabled(not busy)
+        self.register_submit_button.setEnabled(not busy)
+        self.register_submit_button.setText("Creating store..." if busy else "Register")
+
+    def complete_auth_success(self, audit_action: str) -> None:
+        if self.current_user is None:
+            return
         remember_login = self.remember_checkbox.isChecked()
         set_setting("remember_login", "true" if remember_login else "false")
         if remember_login:
@@ -1387,100 +1495,83 @@ class LoginWindow(QDialog):
             )
         else:
             clear_session(sign_out_cloud=False)
-        
-        log_audit(int(self.current_user["id"]), "LOGIN")
+
+        log_audit(int(self.current_user["id"]), audit_action)
         self.accept()
 
-    def open_register_dialog(self) -> None:
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Register Store")
-        dialog.setModal(True)
-        dialog.setMinimumWidth(420)
+    def handle_login(self) -> None:
+        email = self.username_input.text().strip()
+        password = self.password_input.text()
+        
+        if not email or not password:
+            self.set_feedback(self.error_label, "Please enter email and password")
+            return
 
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(14)
+        self.set_feedback(self.error_label, "")
+        self.set_login_busy(True)
+        try:
+            self.current_user = login_with_supabase(email, password)
+        except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
+            self.set_feedback(self.error_label, str(error))
+            self.password_input.clear()
+            self.set_login_busy(False)
+            return
 
-        title = IconManager.label("Register Store", "add", "loginTitle", icon_size=20)
-        layout.addWidget(title)
+        self.complete_auth_success("LOGIN")
 
-        form = QFormLayout()
-        form.setHorizontalSpacing(12)
-        form.setVerticalSpacing(12)
+    def handle_register(self) -> None:
+        store_name = self.register_store_input.text().strip()
+        full_name = self.register_full_name_input.text().strip()
+        email = self.register_email_input.text().strip()
+        password = self.register_password_input.text()
+        confirm_password = self.register_confirm_input.text()
 
-        store_input = QLineEdit()
-        store_input.setPlaceholderText("Store name")
-        full_name_input = QLineEdit()
-        full_name_input.setPlaceholderText("Owner full name")
-        email_input = QLineEdit()
-        email_input.setPlaceholderText("Email")
-        password_input = QLineEdit()
-        password_input.setPlaceholderText("Password")
-        password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        confirm_input = QLineEdit()
-        confirm_input.setPlaceholderText("Confirm password")
-        confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
+        if not store_name or not full_name or not email or not password:
+            self.set_feedback(self.register_error_label, "Please fill all fields.")
+            return
+        if password != confirm_password:
+            self.set_feedback(self.register_error_label, "Passwords do not match.")
+            return
+        if len(password) < 6:
+            self.set_feedback(self.register_error_label, "Password must be at least 6 characters.")
+            return
 
-        form.addRow("Store", store_input)
-        form.addRow("Owner", full_name_input)
-        form.addRow("Email", email_input)
-        form.addRow("Password", password_input)
-        form.addRow("Confirm", confirm_input)
-        layout.addLayout(form)
+        self.register_error_label.clear()
+        self.set_register_busy(True)
+        try:
+            registered_user = register_store_owner(store_name, full_name, email, password)
+        except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
+            self.set_feedback(self.register_error_label, str(error))
+            self.register_password_input.clear()
+            self.register_confirm_input.clear()
+            self.set_register_busy(False)
+            return
 
-        error_label = QLabel("")
-        error_label.setObjectName("errorLabel")
-        error_label.setWordWrap(True)
-        layout.addWidget(error_label)
-
-        button_layout = QHBoxLayout()
-        button_layout.addStretch(1)
-        cancel_button = QPushButton("Cancel")
-        cancel_button.setObjectName("neutralButton")
-        register_button = QPushButton("Register")
-        register_button.setObjectName("loginButton")
-        button_layout.addWidget(cancel_button)
-        button_layout.addWidget(register_button)
-        layout.addLayout(button_layout)
-
-        def submit_registration() -> None:
-            store_name = store_input.text().strip()
-            full_name = full_name_input.text().strip()
-            email = email_input.text().strip()
-            password = password_input.text()
-            confirm_password = confirm_input.text()
-            if not store_name or not full_name or not email or not password:
-                error_label.setText("Please fill all fields.")
-                return
-            if password != confirm_password:
-                error_label.setText("Passwords do not match.")
-                return
-            if len(password) < 6:
-                error_label.setText("Password must be at least 6 characters.")
-                return
-            try:
-                self.current_user = register_store_owner(store_name, full_name, email, password)
-            except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
-                error_label.setText(str(error))
-                return
-
-            set_setting("remember_login", "true" if self.remember_checkbox.isChecked() else "false")
-            if self.remember_checkbox.isChecked():
-                save_session(
-                    int(self.current_user["id"]),
-                    str(self.current_user.get("cloud_auth_id") or ""),
-                    str(self.current_user.get("store_id") or ""),
-                )
-            else:
-                clear_session(sign_out_cloud=False)
-            log_audit(int(self.current_user["id"]), "REGISTER_STORE")
-            dialog.accept()
-            self.accept()
-
-        cancel_button.clicked.connect(dialog.reject)
-        register_button.clicked.connect(submit_registration)
-        dialog.setStyleSheet(self.styleSheet())
-        dialog.exec()
+        try:
+            log_audit(int(registered_user["id"]), "REGISTER_STORE")
+        except Exception:
+            pass
+        clear_session(sign_out_cloud=True)
+        self.current_user = None
+        self.set_register_busy(False)
+        self.register_store_input.clear()
+        self.register_full_name_input.clear()
+        self.register_email_input.clear()
+        self.register_password_input.clear()
+        self.register_confirm_input.clear()
+        self.username_input.setText(email)
+        self.password_input.clear()
+        self.set_auth_mode("login")
+        self.set_feedback(
+            self.error_label,
+            "Store registered. Please log in with the new account.",
+            "success",
+        )
+        QMessageBox.information(
+            self,
+            "Registration Complete",
+            "Store registration is complete. Please log in with the new account.",
+        )
 
     def toggle_password_visibility(self) -> None:
         if self.password_toggle_button.isChecked():
@@ -1536,22 +1627,39 @@ class LoginWindow(QDialog):
                 border-radius: 12px;
             }
 
+            #authStack {
+                background: transparent;
+            }
+
             #loginTitle {
                 color: #050505;
-                font-size: 30px;
+                font-size: 28px;
                 font-weight: 900;
             }
 
+            #authHint {
+                color: #64748B;
+                font-size: 12px;
+                font-weight: 650;
+            }
+
             #inputRow {
-                background: #FFFFFF;
+                background: #F8FAFC;
                 border: 1px solid #E1E6EE;
+                border-radius: 7px;
+            }
+
+            #inputRow[focused="true"] {
+                background: #FFFFFF;
+                border: 2px solid #3B82F6;
                 border-radius: 7px;
             }
 
             #iconSeparator {
                 background: #EEF1F5;
                 border: none;
-                min-height: 28px;
+                min-height: 22px;
+                max-height: 22px;
             }
 
             #cardInput {
@@ -1563,55 +1671,10 @@ class LoginWindow(QDialog):
                 min-height: 34px;
             }
 
-            #roleCombo {
+            #inputRow #cardInput,
+            #inputRow[focused="true"] #cardInput {
                 background: transparent;
                 border: none;
-                color: #111111;
-                font-size: 14px;
-                padding: 0;
-            }
-
-            #roleCombo::drop-down {
-                border: none;
-                width: 24px;
-            }
-
-            #roleCombo::down-arrow {
-                image: none;
-                border-left: 5px solid transparent;
-                border-right: 5px solid transparent;
-                border-top: 6px solid #5B91BB;
-                width: 0;
-                height: 0;
-                margin-right: 8px;
-            }
-
-            #roleCombo QAbstractItemView {
-                background: #FFFFFF;
-                border: 1px solid #DCE5F0;
-                border-radius: 8px;
-                color: #111827;
-                font-size: 14px;
-                outline: none;
-                padding: 4px;
-                selection-background-color: transparent;
-                selection-color: #111827;
-            }
-
-            #roleCombo QAbstractItemView::item {
-                min-height: 34px;
-                padding: 0 12px;
-                border-radius: 6px;
-            }
-
-            #roleCombo QAbstractItemView::item:hover {
-                background: #F5F8FC;
-                color: #111827;
-            }
-
-            #roleCombo QAbstractItemView::item:selected {
-                background: #EAF3FF;
-                color: #1F77FF;
             }
 
             #passwordToggleButton {
@@ -1669,6 +1732,11 @@ class LoginWindow(QDialog):
                 color: #DC2626;
                 font-size: 12px;
                 font-weight: 700;
+                line-height: 16px;
+            }
+
+            #errorLabel[feedback="success"] {
+                color: #059669;
             }
 
             """ + MODERN_WIDGET_STYLESHEET

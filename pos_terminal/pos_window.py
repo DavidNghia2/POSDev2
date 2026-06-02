@@ -3,14 +3,13 @@ from datetime import datetime
 from pathlib import Path
 from textwrap import wrap
 
-from PyQt6.QtCore import QEasingCurve, QPropertyAnimation, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QFormLayout,
     QFrame,
-    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
@@ -57,6 +56,7 @@ from login import (
     has_permission,
     log_audit,
     open_cash_shift,
+    refresh_store_users_from_cloud,
 )
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.qr_display import qr_focus_pixmap
@@ -216,12 +216,13 @@ class PosMainWindow(QMainWindow):
         self.sidebar_expanded_widgets: list[QWidget] = []
         self.sidebar_toggle_button: QPushButton | None = None
         self.central_container: QWidget | None = None
-        self.sync_button: QPushButton | None = None
         self.logout_button: QPushButton | None = None
         self.logout_requested = False
-        self.reset_toast: QLabel | None = None
-        self.reset_toast_effect: QGraphicsOpacityEffect | None = None
-        self.reset_toast_animation: QPropertyAnimation | None = None
+        self.cloud_sync_running = False
+        self.realtime_thread: QThread | None = None
+        self.realtime_worker = None
+        self.background_sync_timer: QTimer | None = None
+        self.background_sync_pending_kinds: set[str] = set()
 
         self.build_ui()
         self.connect_global_refresh()
@@ -296,6 +297,15 @@ class PosMainWindow(QMainWindow):
         if data_changed_signal is not None:
             data_changed_signal.connect(self.notify_app_data_changed)
 
+        sync_requested_signal = getattr(page, "sync_requested", None)
+        if sync_requested_signal is not None:
+            sync_requested_signal.connect(
+                lambda kinds, source=page: self.request_background_sync(
+                    source.__class__.__name__,
+                    kinds,
+                )
+            )
+
     def get_reload_handler(self, page: QWidget):
         for method_name in (
             "reload_data",
@@ -312,6 +322,7 @@ class PosMainWindow(QMainWindow):
         return None
 
     def notify_app_data_changed(self) -> None:
+        self.remove_unavailable_cart_items()
         self.app_data_changed.emit()
 
     def ensure_product_management_page(self) -> QWidget | None:
@@ -340,17 +351,122 @@ class PosMainWindow(QMainWindow):
 
         self.cloud_sync_timer = QTimer(self)
         self.cloud_sync_timer.setInterval(60000)
-        self.cloud_sync_timer.timeout.connect(self.run_cloud_sync)
+        self.cloud_sync_timer.timeout.connect(
+            lambda: self.request_background_sync("timer", {"full", "users"}, delay_ms=0)
+        )
         self.cloud_sync_timer.start()
 
-    def run_cloud_sync(self) -> None:
-        try:
-            db.sync_now()
-        except Exception as error:
-            self.statusBar().showMessage(f"Cloud sync skipped: {error}", 5000)
+        self.background_sync_timer = QTimer(self)
+        self.background_sync_timer.setSingleShot(True)
+        self.background_sync_timer.setInterval(1500)
+        self.background_sync_timer.timeout.connect(self.run_background_sync)
+        self.start_realtime_sync()
+
+    def request_background_sync(
+        self,
+        reason: str,
+        kinds: object | None = None,
+        delay_ms: int = 1500,
+    ) -> None:
+        normalized = self.normalize_sync_kinds(kinds)
+        if not normalized:
             return
+        self.background_sync_pending_kinds.update(normalized)
+        if self.background_sync_timer is not None:
+            self.background_sync_timer.start(max(0, delay_ms))
+
+    def normalize_sync_kinds(self, kinds: object | None) -> set[str]:
+        if kinds is None:
+            return {"full", "users"}
+        if isinstance(kinds, str):
+            raw_kinds = {kinds}
+        else:
+            try:
+                raw_kinds = {str(kind) for kind in kinds}  # type: ignore[arg-type]
+            except TypeError:
+                raw_kinds = set()
+        normalized = {
+            kind.strip().lower()
+            for kind in raw_kinds
+            if kind and kind.strip().lower() in {"products", "sales", "users", "full", "all"}
+        }
+        if "all" in normalized:
+            normalized.discard("all")
+            normalized.update({"full", "users"})
+        return normalized
+
+    def run_background_sync(self) -> None:
+        if not self.background_sync_pending_kinds:
+            return
+        if self.cloud_sync_running:
+            if self.background_sync_timer is not None:
+                self.background_sync_timer.start(1000)
+            return
+
+        kinds = set(self.background_sync_pending_kinds)
+        self.background_sync_pending_kinds.clear()
+        self.cloud_sync_running = True
+        try:
+            store_id = db.get_current_store_id()
+            if "users" in kinds and db.cloud_sync_enabled_for_store(store_id):
+                refresh_store_users_from_cloud()
+            if "full" in kinds:
+                db.sync_now()
+            else:
+                db.sync_realtime_update(kinds & {"products", "sales"})
+        except Exception as error:
+            self.background_sync_pending_kinds.update(kinds)
+            if self.background_sync_timer is not None:
+                self.background_sync_timer.start(5000)
+            self.statusBar().showMessage(f"Background sync skipped: {error}", 5000)
+            return
+        finally:
+            self.cloud_sync_running = False
         self.notify_app_data_changed()
-        self.statusBar().showMessage("Cloud sync complete.", 2500)
+        if self.background_sync_pending_kinds and self.background_sync_timer is not None:
+            self.background_sync_timer.start(500)
+
+    def start_realtime_sync(self) -> None:
+        store_id = db.get_current_store_id()
+        if not db.cloud_sync_enabled_for_store(store_id):
+            return
+        try:
+            from pos_terminal.realtime_worker import RealtimeSyncWorker
+        except Exception as error:
+            self.statusBar().showMessage(f"Realtime sync unavailable: {error}", 5000)
+            return
+
+        self.realtime_thread = QThread(self)
+        self.realtime_worker = RealtimeSyncWorker(store_id)
+        self.realtime_worker.moveToThread(self.realtime_thread)
+        self.realtime_thread.started.connect(self.realtime_worker.run)
+        self.realtime_worker.dirty.connect(self.queue_realtime_sync)
+        self.realtime_worker.status.connect(self.show_realtime_status)
+        self.realtime_worker.finished.connect(self.realtime_thread.quit)
+        self.realtime_worker.finished.connect(self.realtime_worker.deleteLater)
+        self.realtime_thread.finished.connect(self.realtime_thread.deleteLater)
+        self.realtime_thread.finished.connect(self.clear_realtime_worker_refs)
+        self.realtime_thread.start()
+
+    def stop_realtime_sync(self) -> None:
+        worker = self.realtime_worker
+        thread = self.realtime_thread
+        if worker is not None:
+            worker.stop()
+        if thread is not None and thread.isRunning():
+            thread.wait(2000)
+
+    def clear_realtime_worker_refs(self) -> None:
+        self.realtime_thread = None
+        self.realtime_worker = None
+
+    def show_realtime_status(self, message: str) -> None:
+        lowered = message.lower()
+        if any(word in lowered for word in ("error", "failed", "stopped", "unavailable", "disconnected")):
+            self.statusBar().showMessage(message, 5000)
+
+    def queue_realtime_sync(self, kinds: object) -> None:
+        self.request_background_sync("realtime", kinds)
 
     def user_can_checkout_offline(self) -> bool:
         role_name = str(self.user_data.get("role_name") or "")
@@ -710,14 +826,6 @@ class PosMainWindow(QMainWindow):
         self.switch_page(self.pages.currentIndex())
 
         layout.addStretch(1)
-
-        self.sync_button = QPushButton("Sync Now")
-        self.sync_button.setObjectName("syncButton")
-        self.sync_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.sync_button.setToolTip("Sync Now")
-        IconManager.apply_button(self.sync_button, "refresh", IconManager.LIGHT)
-        self.sync_button.clicked.connect(self.run_cloud_sync)
-        layout.addWidget(self.sync_button)
 
         self.logout_button = QPushButton("Logout")
         self.logout_button.setObjectName("logoutButton")
@@ -1112,55 +1220,11 @@ class PosMainWindow(QMainWindow):
         escape_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
         escape_shortcut.activated.connect(self.handle_void_cancel)
 
-        refresh_shortcut = QShortcut(QKeySequence("Shift+F5"), self)
-        refresh_shortcut.activated.connect(self.handle_reset_shortcut)
-
         focus_search_action = QAction(self)
         IconManager.apply_action(focus_search_action, "search")
         focus_search_action.setShortcut(QKeySequence("Ctrl+L"))
         focus_search_action.triggered.connect(self.search_input.setFocus)
         self.addAction(focus_search_action)
-
-    def handle_reset_shortcut(self) -> None:
-        self.run_cloud_sync()
-        self.show_reset_toast("Sync complete")
-
-    def show_reset_toast(self, message: str) -> None:
-        if self.reset_toast is None:
-            self.reset_toast = QLabel(self)
-            self.reset_toast.setObjectName("resetToast")
-            self.reset_toast.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            self.reset_toast_effect = QGraphicsOpacityEffect(self.reset_toast)
-            self.reset_toast.setGraphicsEffect(self.reset_toast_effect)
-
-        self.reset_toast.setText(message)
-        self.reset_toast.adjustSize()
-        toast_width = max(self.reset_toast.width() + 34, 180)
-        toast_height = max(self.reset_toast.height() + 18, 42)
-        self.reset_toast.resize(toast_width, toast_height)
-        self.reset_toast.move(
-            max(self.width() - toast_width - 28, 20),
-            max(self.height() - toast_height - 58, 20),
-        )
-        self.reset_toast.raise_()
-        self.reset_toast.show()
-
-        if self.reset_toast_animation is not None:
-            self.reset_toast_animation.stop()
-
-        if self.reset_toast_effect is None:
-            return
-
-        self.reset_toast_effect.setOpacity(0.0)
-        self.reset_toast_animation = QPropertyAnimation(self.reset_toast_effect, b"opacity", self)
-        self.reset_toast_animation.setDuration(1700)
-        self.reset_toast_animation.setKeyValueAt(0.0, 0.0)
-        self.reset_toast_animation.setKeyValueAt(0.18, 1.0)
-        self.reset_toast_animation.setKeyValueAt(0.78, 1.0)
-        self.reset_toast_animation.setKeyValueAt(1.0, 0.0)
-        self.reset_toast_animation.setEasingCurve(QEasingCurve.Type.InOutQuad)
-        self.reset_toast_animation.finished.connect(self.reset_toast.hide)
-        self.reset_toast_animation.start()
 
     def request_logout(self) -> None:
         reply = QMessageBox.question(
@@ -1342,6 +1406,33 @@ class PosMainWindow(QMainWindow):
         ]
         self.populate_cart()
 
+    def remove_unavailable_cart_items(self) -> list[str]:
+        if not getattr(self, "cart_items", None):
+            return []
+
+        available_items: list[CartItem] = []
+        removed_names: list[str] = []
+        for item in self.cart_items:
+            if db.get_product_by_id(item.product_id) is None:
+                removed_names.append(item.name)
+            else:
+                available_items.append(item)
+
+        if not removed_names:
+            return []
+
+        self.cart_items = available_items
+        if hasattr(self, "cart_table"):
+            self.populate_cart()
+        preview = ", ".join(removed_names[:3])
+        if len(removed_names) > 3:
+            preview += f" and {len(removed_names) - 3} more"
+        self.statusBar().showMessage(
+            f"Removed unavailable product(s) from cart: {preview}",
+            6000,
+        )
+        return removed_names
+
     def get_cart_quantity_for_product(self, product_id: int) -> float:
         return sum(item.qty for item in self.cart_items if item.product_id == product_id)
 
@@ -1362,6 +1453,13 @@ class PosMainWindow(QMainWindow):
         QMessageBox.warning(self, "Out of Stock", message)
 
     def ensure_cart_in_stock(self) -> bool:
+        if self.remove_unavailable_cart_items():
+            QMessageBox.warning(
+                self,
+                "Product Unavailable",
+                "One or more products were removed from the cart because they are no longer available.",
+            )
+            return False
         for item in self.cart_items:
             available_qty = db.get_available_stock(item.product_id)
             if available_qty <= 0 or item.qty > available_qty:
@@ -2147,6 +2245,10 @@ class PosMainWindow(QMainWindow):
         self.search_input.setFocus()
         self.search_input.selectAll()
 
+    def closeEvent(self, event) -> None:
+        self.stop_realtime_sync()
+        super().closeEvent(event)
+
 
 def build_stylesheet() -> str:
     return f"""
@@ -2256,25 +2358,6 @@ def build_stylesheet() -> str:
     #logoutButton[collapsed="true"] {{
         padding: 12px 0;
         text-align: center;
-    }}
-
-    #syncButton {{
-        background: #2563EB;
-        border: none;
-        border-radius: 8px;
-        color: #FFFFFF;
-        font-size: 14px;
-        font-weight: 700;
-        padding: 12px 14px;
-        text-align: left;
-    }}
-
-    #syncButton:hover {{
-        background: #1D4ED8;
-    }}
-
-    #syncButton:pressed {{
-        background: #1E40AF;
     }}
 
     #logoutButton:hover {{
@@ -2467,15 +2550,6 @@ def build_stylesheet() -> str:
     #statusHint {{
         color: {TEXT_MUTED};
         font-size: 12px;
-    }}
-
-    #resetToast {{
-        background: rgba(15, 118, 110, 0.96);
-        border-radius: 10px;
-        color: #FFFFFF;
-        font-size: 13px;
-        font-weight: 800;
-        padding: 10px 16px;
     }}
 
     #totalBlock {{

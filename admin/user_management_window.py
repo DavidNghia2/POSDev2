@@ -1,4 +1,7 @@
-from PyQt6.QtCore import Qt, pyqtSignal
+from time import monotonic
+
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -7,7 +10,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -31,14 +33,18 @@ from ui.theme import MODERN_WIDGET_STYLESHEET
 
 class UserManagementWindow(QWidget):
     data_changed = pyqtSignal()
+    sync_requested = pyqtSignal(object)
 
     def __init__(self, current_user: dict, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.current_user = current_user
         self.selected_user_id: int | None = None
+        self.last_sync_request_at = 0.0
+        self.last_status_message = ""
         self.create_ui()
         self.load_users()
         self.load_roles()
+        self.update_form_mode()
 
     def create_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -62,12 +68,6 @@ class UserManagementWindow(QWidget):
         
         header_layout.addLayout(title_block)
         header_layout.addStretch()
-
-        refresh_button = QPushButton("Sync Users")
-        IconManager.apply_button(refresh_button, "refresh", IconManager.LIGHT)
-        refresh_button.setObjectName("secondaryButton")
-        refresh_button.clicked.connect(self.refresh_users_from_cloud)
-        header_layout.addWidget(refresh_button)
         
         layout.addLayout(header_layout)
         
@@ -98,6 +98,10 @@ class UserManagementWindow(QWidget):
         
         section_label = IconManager.label("User Details", "user", "sectionLabel")
         layout.addWidget(section_label)
+
+        self.form_mode_label = QLabel("New user")
+        self.form_mode_label.setObjectName("helperLabel")
+        layout.addWidget(self.form_mode_label)
         
         form_layout = QVBoxLayout()
         form_layout.setSpacing(12)
@@ -132,8 +136,9 @@ class UserManagementWindow(QWidget):
         # Password
         password_label = QLabel("Password")
         password_label.setObjectName("formLabel")
+        self.password_label = password_label
         self.password_input = QLineEdit()
-        self.password_input.setPlaceholderText("Enter password")
+        self.password_input.setPlaceholderText("Required for new user")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
         
         form_layout.addWidget(password_label)
@@ -154,12 +159,7 @@ class UserManagementWindow(QWidget):
         IconManager.apply_button(self.update_button, "edit", IconManager.LIGHT)
         self.update_button.setObjectName("secondaryButton")
         self.update_button.clicked.connect(self.update_user_action)
-        
-        self.delete_button = QPushButton("Delete User")
-        IconManager.apply_button(self.delete_button, "delete", IconManager.LIGHT)
-        self.delete_button.setObjectName("dangerButton")
-        self.delete_button.clicked.connect(self.delete_user_action)
-        
+
         self.clear_button = QPushButton("Clear")
         IconManager.apply_button(self.clear_button, "clear", IconManager.LIGHT)
         self.clear_button.setObjectName("neutralButton")
@@ -167,11 +167,16 @@ class UserManagementWindow(QWidget):
         
         button_layout.addWidget(self.add_button)
         button_layout.addWidget(self.update_button)
-        button_layout.addWidget(self.delete_button)
         button_layout.addWidget(self.clear_button)
         
         layout.addLayout(button_layout)
         layout.addStretch()
+
+        self.delete_button = QPushButton("Deactivate User")
+        IconManager.apply_button(self.delete_button, "delete", IconManager.LIGHT)
+        self.delete_button.setObjectName("dangerButton")
+        self.delete_button.clicked.connect(self.delete_user_action)
+        layout.addWidget(self.delete_button)
         
         return panel
 
@@ -197,7 +202,7 @@ class UserManagementWindow(QWidget):
         self.users_table = QTableWidget()
         self.users_table.setColumnCount(5)
         self.users_table.setHorizontalHeaderLabels(
-            ["ID", "Email", "Full Name", "Role", "Active"]
+            ["Email", "Full Name", "Role", "Status", "Created"]
         )
         self.users_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.users_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -207,48 +212,75 @@ class UserManagementWindow(QWidget):
         self.users_table.verticalHeader().setVisible(False)
         
         header = self.users_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         
-        self.users_table.setColumnWidth(1, 150)
-        self.users_table.setColumnWidth(2, 180)
+        self.users_table.setColumnWidth(0, 220)
+        self.users_table.verticalHeader().setDefaultSectionSize(42)
         
         self.users_table.itemSelectionChanged.connect(self.load_selected_user)
         
         layout.addWidget(self.users_table, 1)
+
+        self.status_label = QLabel("")
+        self.status_label.setObjectName("statusLabel")
+        layout.addWidget(self.status_label)
         
         return panel
 
     def load_users(self) -> None:
         keyword = self.search_input.text().strip()
-        users = get_all_users()
+        all_users = get_all_users()
+        users = all_users
         
         if keyword:
             users = [
                 u for u in users
                 if keyword.lower() in str(u["email"] or u["username"]).lower()
                 or keyword.lower() in str(u["full_name"]).lower()
+                or keyword.lower() in str(u["role_name"] or "").lower()
+                or keyword.lower() in ("active" if u["active"] else "inactive")
             ]
         
         self.users_table.setRowCount(len(users))
         for row_index, user in enumerate(users):
-            values = [
-                str(user["id"]),
+            status = "Active" if user["active"] else "Inactive"
+            values = (
                 user["email"] or user["username"] or "",
                 user["full_name"] or "",
                 user["role_name"] or "None",
-                "Yes" if user["active"] else "No",
-            ]
-            
+                status,
+                str(user["created_at"] or "")[:19],
+            )
+
             for column_index, value in enumerate(values):
-                table_item = QTableWidgetItem(value)
+                alignment = (
+                    Qt.AlignmentFlag.AlignCenter
+                    if column_index in {2, 3}
+                    else Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+                )
+                table_item = self.make_table_item(str(value), alignment)
                 if column_index == 0:
                     table_item.setData(Qt.ItemDataRole.UserRole, int(user["id"]))
-                table_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                if column_index == 3:
+                    table_item.setForeground(QColor("#0F766E" if user["active"] else "#B91C1C"))
                 self.users_table.setItem(row_index, column_index, table_item)
+
+        if keyword and not users:
+            self.set_status(f"No users match '{keyword}'.")
+        elif not all_users:
+            self.set_status("No users in this store yet.")
+        else:
+            suffix = "user" if len(users) == 1 else "users"
+            self.set_status(f"{len(users)} {suffix} shown.")
+
+    def make_table_item(self, value: str, alignment: Qt.AlignmentFlag) -> QTableWidgetItem:
+        table_item = QTableWidgetItem(value)
+        table_item.setTextAlignment(alignment)
+        return table_item
 
     def load_roles(self) -> None:
         roles = get_all_roles()
@@ -264,19 +296,49 @@ class UserManagementWindow(QWidget):
         try:
             refresh_store_users_from_cloud()
         except Exception as error:
-            QMessageBox.warning(self, "Sync Error", str(error))
+            self.set_status(f"Could not refresh users: {error}", is_error=True)
             return
         self.load_users()
-        QMessageBox.information(self, "Success", "Users synced from Supabase.")
+        self.set_status("Users updated.")
+
+    def request_user_sync(self, force: bool = False) -> None:
+        now = monotonic()
+        if not force and now - self.last_sync_request_at < 60:
+            return
+        self.last_sync_request_at = now
+        self.sync_requested.emit({"users"})
+
+    def set_status(self, message: str, is_error: bool = False) -> None:
+        self.last_status_message = message
+        self.status_label.setText(message)
+        self.status_label.setProperty("error", is_error)
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
+
+    def update_form_mode(self) -> None:
+        editing = self.selected_user_id is not None
+        self.form_mode_label.setText(
+            "Editing selected user. Leave password blank to keep it unchanged."
+            if editing
+            else "Create a new store user."
+        )
+        self.password_label.setText("New Password" if editing else "Password")
+        self.password_input.setPlaceholderText(
+            "Leave blank to keep current" if editing else "Required for new user"
+        )
+        self.add_button.setEnabled(not editing)
+        self.update_button.setEnabled(editing)
+        self.delete_button.setEnabled(editing)
 
     def load_selected_user(self) -> None:
         selected_row = self.users_table.currentRow()
         if selected_row < 0:
             return
-        
-        self.selected_user_id = int(
-            self.users_table.item(selected_row, 0).data(Qt.ItemDataRole.UserRole)
-        )
+
+        id_item = self.users_table.item(selected_row, 0)
+        if id_item is None:
+            return
+        self.selected_user_id = int(id_item.data(Qt.ItemDataRole.UserRole))
         
         users = get_all_users()
         user = next((u for u in users if u["id"] == self.selected_user_id), None)
@@ -286,7 +348,7 @@ class UserManagementWindow(QWidget):
             self.fullname_input.setText(user["full_name"])
             self.role_combo.setCurrentText(user["role_name"] or "")
             self.password_input.clear()
-            self.password_input.setPlaceholderText("Leave blank to keep current")
+            self.update_form_mode()
 
     def add_user_action(self) -> None:
         email = self.username_input.text().strip()
@@ -295,28 +357,29 @@ class UserManagementWindow(QWidget):
         role_id = self.role_combo.currentData()
         
         if not email or not full_name or not password:
-            QMessageBox.warning(self, "Validation Error", "Please fill all fields")
+            self.set_status("Please fill email, full name, and password.", is_error=True)
             return
         
         if role_id is None:
-            QMessageBox.warning(self, "Validation Error", "Please select a role")
+            self.set_status("Please select a role.", is_error=True)
             return
         
         try:
             user_id = add_user(email, password, full_name, role_id)
             log_audit(self.current_user["id"], "CREATE_USER", "users", user_id, None, f"email: {email}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+            self.set_status(str(e), is_error=True)
             return
         
         self.clear_form()
         self.load_users()
         self.data_changed.emit()
-        QMessageBox.information(self, "Success", "User added successfully")
+        self.sync_requested.emit({"users"})
+        self.set_status("User added.")
 
     def update_user_action(self) -> None:
         if self.selected_user_id is None:
-            QMessageBox.warning(self, "Validation Error", "Please select a user to update")
+            self.set_status("Select a user to update.", is_error=True)
             return
         
         email = self.username_input.text().strip()
@@ -325,28 +388,29 @@ class UserManagementWindow(QWidget):
         role_id = self.role_combo.currentData()
         
         if not email or not full_name:
-            QMessageBox.warning(self, "Validation Error", "Please fill required fields")
+            self.set_status("Please fill email and full name.", is_error=True)
             return
         
         if role_id is None:
-            QMessageBox.warning(self, "Validation Error", "Please select a role")
+            self.set_status("Please select a role.", is_error=True)
             return
         
         try:
             update_user(self.selected_user_id, email, full_name, role_id, password)
             log_audit(self.current_user["id"], "UPDATE_USER", "users", self.selected_user_id, None, f"email: {email}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+            self.set_status(str(e), is_error=True)
             return
         
         self.clear_form()
         self.load_users()
         self.data_changed.emit()
-        QMessageBox.information(self, "Success", "User updated successfully")
+        self.sync_requested.emit({"users"})
+        self.set_status("User updated.")
 
     def delete_user_action(self) -> None:
         if self.selected_user_id is None:
-            QMessageBox.warning(self, "Validation Error", "Please select a user to delete")
+            self.set_status("Select a user to deactivate.", is_error=True)
             return
         
         if not confirm_delete(
@@ -359,13 +423,14 @@ class UserManagementWindow(QWidget):
             delete_user(self.selected_user_id, self.current_user["id"])
             log_audit(self.current_user["id"], "DELETE_USER", "users", self.selected_user_id)
         except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+            self.set_status(str(e), is_error=True)
             return
         
         self.clear_form()
         self.load_users()
         self.data_changed.emit()
-        QMessageBox.information(self, "Success", "User deactivated successfully")
+        self.sync_requested.emit({"users"})
+        self.set_status("User deactivated.")
 
     def clear_form(self) -> None:
         self.selected_user_id = None
@@ -378,6 +443,7 @@ class UserManagementWindow(QWidget):
         self.fullname_input.clear()
         self.password_input.clear()
         self.role_combo.setCurrentIndex(-1)
+        self.update_form_mode()
         self.username_input.setFocus()
 
     def apply_styles(self) -> None:
@@ -392,7 +458,7 @@ class UserManagementWindow(QWidget):
 
             #titleLabel {
                 color: #17212B;
-                font-size: 26px;
+                font-size: 24px;
                 font-weight: 700;
             }
 
@@ -417,6 +483,16 @@ class UserManagementWindow(QWidget):
                 color: #64707D;
                 font-size: 12px;
                 font-weight: 600;
+            }
+
+            #helperLabel, #statusLabel {
+                color: #64707D;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            #statusLabel[error="true"] {
+                color: #B91C1C;
             }
 
             QLineEdit, QComboBox {
@@ -451,7 +527,13 @@ class UserManagementWindow(QWidget):
             }
             
             #neutralButton {
-                background: #6B7280;
+                background: #E2E8F0;
+                color: #17212B;
+            }
+
+            QPushButton:disabled {
+                background: #CBD5E1;
+                color: #64748B;
             }
 
             QPushButton:pressed {
@@ -486,6 +568,7 @@ class UserManagementWindow(QWidget):
     def showEvent(self, event) -> None:
         super().showEvent(event)
         self.apply_styles()
+        QTimer.singleShot(0, self.request_user_sync)
 
 
 def create_user_management(current_user: dict) -> UserManagementWindow:
