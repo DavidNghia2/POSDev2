@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
+
+from supabase_functions.errors import FunctionsError
 
 from .supabase_client import get_access_token, get_supabase_client
 
@@ -314,13 +317,26 @@ def list_store_users() -> list[dict[str, Any]]:
 
 def invoke_admin_function(function_name: str, payload: dict[str, Any]) -> dict[str, Any]:
     token = get_access_token()
-    options: dict[str, Any] = {"body": payload}
+    options: dict[str, Any] = {"body": payload, "responseType": "json"}
     if token:
         options["headers"] = {"Authorization": f"Bearer {token}"}
-    response = get_supabase_client().functions.invoke(function_name, invoke_options=options)
-    data = _data_or_raise(response, function_name)
+    try:
+        data = get_supabase_client().functions.invoke(function_name, invoke_options=options)
+    except FunctionsError as error:
+        raise CloudAuthError(f"{function_name} failed: {error.message}") from error
+    if isinstance(data, bytes):
+        try:
+            data = data.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise CloudAuthError(f"{function_name} returned unreadable bytes: {data[:120]!r}") from error
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except json.JSONDecodeError as error:
+            preview = data[:240] + ("..." if len(data) > 240 else "")
+            raise CloudAuthError(f"{function_name} returned invalid JSON: {preview}") from error
     if not isinstance(data, dict):
-        raise CloudAuthError(f"{function_name} returned an invalid payload.")
+        raise CloudAuthError(f"{function_name} returned an invalid payload: {type(data).__name__}")
     if data.get("error"):
         raise CloudAuthError(str(data["error"]))
     profile = data.get("profile")
@@ -347,6 +363,7 @@ def admin_update_user(
     password: str | None = None,
     active: bool = True,
     deleted_at: str | None = None,
+    include_deleted_at: bool = False,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "auth_user_id": auth_user_id,
@@ -354,8 +371,9 @@ def admin_update_user(
         "full_name": full_name.strip(),
         "role_name": role_name,
         "active": active,
-        "deleted_at": deleted_at,
     }
+    if deleted_at is not None or include_deleted_at:
+        payload["deleted_at"] = deleted_at
     if password:
         payload["password"] = password
     return invoke_admin_function("admin-update-user", payload)

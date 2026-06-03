@@ -3,7 +3,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Any
 
-from PyQt6.QtCore import QEvent, QRectF, Qt
+from PyQt6.QtCore import QEvent, QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PyQt6.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.icon_manager import IconManager
+from ui.loading import BackgroundTaskRunner
 from ui.theme import MODERN_WIDGET_STYLESHEET
 from app_paths import database_path
 from cloud import auth as cloud_auth
@@ -849,6 +850,7 @@ def set_user_active(user_id: int, active: bool, current_user_id: int | None = No
                 role_name_for_id(int(user["role_id"])),
                 active=active,
                 deleted_at=None,
+                include_deleted_at=True,
             )
             sync_profile_to_local(profile, update_current_store=False)
             return
@@ -1259,6 +1261,13 @@ class LoginWindow(QDialog):
     def __init__(self) -> None:
         super().__init__()
         self.current_user: dict[str, Any] | None = None
+        self.auth_task_runner = BackgroundTaskRunner(self)
+        self.auth_loading_button: QPushButton | None = None
+        self.auth_loading_base_text = ""
+        self.auth_loading_dots = 0
+        self.auth_loading_timer = QTimer(self)
+        self.auth_loading_timer.setInterval(350)
+        self.auth_loading_timer.timeout.connect(self.update_auth_button_loading)
         init_auth_db()
         self.init_ui()
 
@@ -1556,7 +1565,10 @@ class LoginWindow(QDialog):
         ):
             widget.setEnabled(not busy)
         self.login_button.setEnabled(not busy)
-        self.login_button.setText("Logging in..." if busy else "Log in")
+        if busy:
+            self.start_auth_button_loading(self.login_button, "Logging")
+        else:
+            self.stop_auth_button_loading(self.login_button, "Log in")
 
     def set_register_busy(self, busy: bool) -> None:
         for widget in (
@@ -1569,7 +1581,32 @@ class LoginWindow(QDialog):
         ):
             widget.setEnabled(not busy)
         self.register_submit_button.setEnabled(not busy)
-        self.register_submit_button.setText("Creating store..." if busy else "Register")
+        if busy:
+            self.start_auth_button_loading(self.register_submit_button, "Registering")
+        else:
+            self.stop_auth_button_loading(self.register_submit_button, "Register")
+
+    def start_auth_button_loading(self, button: QPushButton, base_text: str) -> None:
+        self.auth_loading_button = button
+        self.auth_loading_base_text = base_text
+        self.auth_loading_dots = 0
+        self.update_auth_button_loading()
+        self.auth_loading_timer.start()
+
+    def stop_auth_button_loading(self, button: QPushButton, default_text: str) -> None:
+        if self.auth_loading_button is button:
+            self.auth_loading_timer.stop()
+            self.auth_loading_button = None
+            self.auth_loading_base_text = ""
+            self.auth_loading_dots = 0
+        button.setText(default_text)
+
+    def update_auth_button_loading(self) -> None:
+        if self.auth_loading_button is None:
+            return
+        dots = "." * self.auth_loading_dots
+        self.auth_loading_button.setText(f"{self.auth_loading_base_text}{dots}")
+        self.auth_loading_dots = (self.auth_loading_dots + 1) % 4
 
     def complete_auth_success(self, audit_action: str) -> None:
         if self.current_user is None:
@@ -1598,15 +1635,25 @@ class LoginWindow(QDialog):
 
         self.set_feedback(self.error_label, "")
         self.set_login_busy(True)
-        try:
-            self.current_user = login_with_supabase(email, password)
-        except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
+
+        def on_success(user: dict[str, Any]) -> None:
+            self.current_user = user
+            self.set_login_busy(False)
+            self.complete_auth_success("LOGIN")
+
+        def on_error(error: Exception) -> None:
             self.set_feedback(self.error_label, str(error))
             self.password_input.clear()
             self.set_login_busy(False)
-            return
 
-        self.complete_auth_success("LOGIN")
+        started = self.auth_task_runner.start(
+            lambda: login_with_supabase(email, password),
+            on_success=on_success,
+            on_error=on_error,
+        )
+        if not started:
+            self.set_feedback(self.error_label, "Authentication is already running.")
+            self.set_login_busy(False)
 
     def handle_register(self) -> None:
         store_name = self.register_store_input.text().strip()
@@ -1627,40 +1674,48 @@ class LoginWindow(QDialog):
 
         self.register_error_label.clear()
         self.set_register_busy(True)
-        try:
-            registered_user = register_store_owner(store_name, full_name, email, password)
-        except (SupabaseConfigError, cloud_auth.CloudAuthError, Exception) as error:
+
+        def on_success(registered_user: dict[str, Any]) -> None:
+            try:
+                log_audit(int(registered_user["id"]), "REGISTER_STORE")
+            except Exception:
+                pass
+            clear_session(sign_out_cloud=True)
+            self.current_user = None
+            self.set_register_busy(False)
+            self.register_store_input.clear()
+            self.register_full_name_input.clear()
+            self.register_email_input.clear()
+            self.register_password_input.clear()
+            self.register_confirm_input.clear()
+            self.username_input.setText(email)
+            self.password_input.clear()
+            self.set_auth_mode("login")
+            self.set_feedback(
+                self.error_label,
+                "Store registered. Please log in with the new account.",
+                "success",
+            )
+            QMessageBox.information(
+                self,
+                "Registration Complete",
+                "Store registration is complete. Please log in with the new account.",
+            )
+
+        def on_error(error: Exception) -> None:
             self.set_feedback(self.register_error_label, str(error))
             self.register_password_input.clear()
             self.register_confirm_input.clear()
             self.set_register_busy(False)
-            return
 
-        try:
-            log_audit(int(registered_user["id"]), "REGISTER_STORE")
-        except Exception:
-            pass
-        clear_session(sign_out_cloud=True)
-        self.current_user = None
-        self.set_register_busy(False)
-        self.register_store_input.clear()
-        self.register_full_name_input.clear()
-        self.register_email_input.clear()
-        self.register_password_input.clear()
-        self.register_confirm_input.clear()
-        self.username_input.setText(email)
-        self.password_input.clear()
-        self.set_auth_mode("login")
-        self.set_feedback(
-            self.error_label,
-            "Store registered. Please log in with the new account.",
-            "success",
+        started = self.auth_task_runner.start(
+            lambda: register_store_owner(store_name, full_name, email, password),
+            on_success=on_success,
+            on_error=on_error,
         )
-        QMessageBox.information(
-            self,
-            "Registration Complete",
-            "Store registration is complete. Please log in with the new account.",
-        )
+        if not started:
+            self.set_feedback(self.register_error_label, "Authentication is already running.")
+            self.set_register_busy(False)
 
     def toggle_password_visibility(self) -> None:
         if self.password_toggle_button.isChecked():

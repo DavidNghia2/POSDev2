@@ -5,6 +5,7 @@ from PyQt6.QtCore import QRectF, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPainter, QPen
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -76,8 +77,11 @@ class UserEditDialog(QDialog):
         self.full_name_input = QLineEdit()
         self.full_name_input.setPlaceholderText("Full name")
         self.role_combo = QComboBox()
+        self.change_password_checkbox = QCheckBox("Change password")
+        self.change_password_checkbox.setObjectName("changePasswordCheck")
+        self.change_password_checkbox.toggled.connect(self.toggle_change_password_fields)
         self.new_password_input = QLineEdit()
-        self.new_password_input.setPlaceholderText("New password (optional)")
+        self.new_password_input.setPlaceholderText("New password")
         self.new_password_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.confirm_password_input = QLineEdit()
         self.confirm_password_input.setPlaceholderText("Confirm new password")
@@ -87,13 +91,24 @@ class UserEditDialog(QDialog):
             ("Email", self.email_input),
             ("Full Name", self.full_name_input),
             ("Role", self.role_combo),
-            ("New Password", self.new_password_input),
-            ("Confirm New Password", self.confirm_password_input),
         ):
             label = QLabel(label_text)
             label.setObjectName("formLabel")
             layout.addWidget(label)
             layout.addWidget(widget)
+
+        layout.addWidget(self.change_password_checkbox)
+
+        self.new_password_label = QLabel("New Password")
+        self.new_password_label.setObjectName("formLabel")
+        layout.addWidget(self.new_password_label)
+        layout.addWidget(self.new_password_input)
+
+        self.confirm_password_label = QLabel("Confirm New Password")
+        self.confirm_password_label.setObjectName("formLabel")
+        layout.addWidget(self.confirm_password_label)
+        layout.addWidget(self.confirm_password_input)
+        self.toggle_change_password_fields(False)
 
         self.feedback_label = QLabel("")
         self.feedback_label.setObjectName("dialogFeedback")
@@ -134,9 +149,19 @@ class UserEditDialog(QDialog):
             "email": self.email_input.text().strip(),
             "full_name": self.full_name_input.text().strip(),
             "role_id": self.role_combo.currentData(),
-            "password": self.new_password_input.text(),
-            "confirm_password": self.confirm_password_input.text(),
+            "change_password": self.change_password_checkbox.isChecked(),
+            "password": self.new_password_input.text() if self.change_password_checkbox.isChecked() else "",
+            "confirm_password": self.confirm_password_input.text() if self.change_password_checkbox.isChecked() else "",
         }
+
+    def toggle_change_password_fields(self, checked: bool) -> None:
+        self.new_password_label.setVisible(checked)
+        self.new_password_input.setVisible(checked)
+        self.confirm_password_label.setVisible(checked)
+        self.confirm_password_input.setVisible(checked)
+        if not checked:
+            self.new_password_input.clear()
+            self.confirm_password_input.clear()
 
     def save_user(self) -> None:
         data = self.form_data()
@@ -146,7 +171,10 @@ class UserEditDialog(QDialog):
         if data["role_id"] is None:
             self.feedback_label.setText("Please select a role.")
             return
-        if data["password"] or data["confirm_password"]:
+        if data["change_password"]:
+            if not data["password"] or not data["confirm_password"]:
+                self.feedback_label.setText("Please fill and confirm the new password.")
+                return
             if data["password"] != data["confirm_password"]:
                 self.feedback_label.setText("New password confirmation does not match.")
                 return
@@ -158,9 +186,11 @@ class UserEditDialog(QDialog):
         def on_error(error: Exception) -> None:
             self.feedback_label.setText(str(error))
             self.save_button.setEnabled(True)
+            self.save_button.setText("Save")
 
         self.feedback_label.setText("")
         self.save_button.setEnabled(False)
+        self.save_button.setText("Saving...")
         started = self.runner.start(
             lambda: self.save_callback(data),
             "Updating user...",
@@ -170,6 +200,7 @@ class UserEditDialog(QDialog):
         )
         if not started:
             self.save_button.setEnabled(True)
+            self.save_button.setText("Save")
             self.feedback_label.setText("A user sync task is already running.")
 
     def apply_styles(self) -> None:
@@ -190,6 +221,16 @@ class UserEditDialog(QDialog):
             }
             #dialogFeedback {
                 color: #B91C1C;
+            }
+            #changePasswordCheck {
+                color: #25313D;
+                font-size: 13px;
+                font-weight: 800;
+                spacing: 8px;
+            }
+            #changePasswordCheck::indicator {
+                width: 16px;
+                height: 16px;
             }
             QLineEdit, QComboBox {
                 background: #FFFFFF;
@@ -471,7 +512,7 @@ class UserManagementWindow(QWidget):
         active = bool(row_value(user, "active"))
         toggle_button = StatusToggle(active)
         toggle_button.setToolTip("Disable user" if active else "Enable user")
-        toggle_button.clicked.connect(lambda _checked=False, u=user: self.toggle_user_active(u))
+        toggle_button.clicked.connect(lambda _checked=False, u=user, b=toggle_button: self.toggle_user_active(u, b))
         
         delete_button = self.icon_action_button("Delete user", "delete", "deleteIconButton")
         delete_button.clicked.connect(lambda _checked=False, u=user: self.soft_delete_user_action(u))
@@ -553,7 +594,8 @@ class UserManagementWindow(QWidget):
 
     def open_edit_dialog(self, user: Any) -> None:
         def save_callback(data: dict[str, Any]) -> dict[str, object]:
-            password = str(data["password"] or "") or None
+            password = str(data["password"] or "") if data.get("change_password") else ""
+            password = password or None
             update_user(
                 int(data["user_id"]),
                 str(data["email"]),
@@ -571,10 +613,13 @@ class UserManagementWindow(QWidget):
             self.set_status("User updated.")
             self.show_toast(f"User updated: {dialog.result_payload.get('email')}")
 
-    def toggle_user_active(self, user: Any) -> None:
+    def toggle_user_active(self, user: Any, toggle_button: StatusToggle | None = None) -> None:
         user_id = int(row_value(user, "id"))
         email = str(row_value(user, "email") or row_value(user, "username") or "")
-        make_active = not bool(row_value(user, "active"))
+        active = bool(row_value(user, "active"))
+        if toggle_button is not None:
+            toggle_button.setChecked(active)
+        make_active = not active
         verb = "Enabling" if make_active else "Disabling"
 
         def task() -> dict[str, object]:
