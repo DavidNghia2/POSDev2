@@ -31,6 +31,7 @@ from ui.currency import DEFAULT_CURRENCY_SYMBOL, format_money, get_currency_symb
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.loading import BlockingTaskRunner, PRODUCT_SYNC_TIMEOUT_MS
+from ui.notifications import friendly_error
 from ui.theme import MODERN_WIDGET_STYLESHEET
 from ui.thumbnail_cache import ThumbnailCache
 
@@ -330,7 +331,10 @@ class ProductTableModel(QAbstractTableModel):
             return values.get(column, "")
 
         if role == Qt.ItemDataRole.ToolTipRole and column == 8:
-            return str(product.get("sync_error") or product.get("sync_status") or "")
+            sync_error = str(product.get("sync_error") or "")
+            if sync_error:
+                return friendly_error(sync_error)
+            return str(product.get("sync_status") or "")
 
         if role == Qt.ItemDataRole.ForegroundRole and column == 8:
             sync_error = str(product.get("sync_error") or "")
@@ -640,7 +644,7 @@ class ProductDialog(QDialog):
             if isinstance(error, sqlite3.IntegrityError):
                 self.show_error("A product with one of these barcodes already exists.")
                 return
-            self.show_error(f"Could not sync product to Supabase.\n\n{error}")
+            self.show_error(friendly_error(error))
 
         if not self.save_task_runner.start(
             task=save_task,
@@ -981,7 +985,7 @@ class ProductManagementWindow(QWidget):
             self.data_changed.emit()
 
         def on_error(error: Exception) -> None:
-            QMessageBox.warning(self, "Delete Sync Error", f"Could not delete product in Supabase.\n\n{error}")
+            QMessageBox.warning(self, "Delete Sync Error", friendly_error(error))
             self.load_products()
 
         self.blocking_task_runner.start(
@@ -1002,7 +1006,7 @@ class ProductManagementWindow(QWidget):
             self.data_changed.emit()
 
         def on_error(error: Exception) -> None:
-            QMessageBox.warning(self, "Product Sync Error", f"Could not sync product to Supabase.\n\n{error}")
+            QMessageBox.warning(self, "Product Sync Error", friendly_error(error))
             self.load_products()
 
         self.blocking_task_runner.start(

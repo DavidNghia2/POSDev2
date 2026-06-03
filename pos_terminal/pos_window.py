@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 from datetime import datetime
+from html import escape
 from pathlib import Path
 from textwrap import wrap
 from uuid import uuid4
 
 from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QShortcut, QTextDocument
+from PyQt6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -41,6 +43,7 @@ from ui.currency import (
 )
 from ui.icon_manager import IconManager
 from ui.loading import BackgroundTaskRunner, BlockingTaskRunner, CHECKOUT_TIMEOUT_MS
+from ui.notifications import NetworkStatusProvider, NotificationProvider, friendly_error
 
 # Admin imports
 from admin.admin_dashboard_window import create_admin_dashboard
@@ -62,7 +65,7 @@ from login import (
 )
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.qr_display import qr_focus_pixmap
-from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.theme import MODERN_WIDGET_STYLESHEET, install_combobox_popup_fix
 from ui.thumbnail_cache import ThumbnailCache
 
 
@@ -226,12 +229,16 @@ class PosMainWindow(QMainWindow):
         self.background_sync_timer: QTimer | None = None
         self.background_sync_pending_kinds: set[str] = set()
         self.background_task_runner = BackgroundTaskRunner(self)
+        self.notifications: NotificationProvider | None = None
+        self.network_status_provider: NetworkStatusProvider | None = None
 
         self.build_ui()
+        self.notifications = NotificationProvider(self, self.central_container)
         self.connect_global_refresh()
         self.start_shared_data_refresh()
         self.populate_cart()
         self.create_shortcuts()
+        self.start_network_status_provider()
 
     def build_ui(self) -> None:
         central = QWidget()
@@ -284,6 +291,44 @@ class PosMainWindow(QMainWindow):
         root_layout.addWidget(self.create_sidebar())
         root_layout.addWidget(self.pages, 1)
         self.create_sidebar_toggle_button()
+
+    def start_network_status_provider(self) -> None:
+        self.network_status_provider = NetworkStatusProvider(
+            self,
+            on_offline=self.handle_network_offline,
+            on_online=self.handle_network_online,
+        )
+
+    def handle_network_offline(self) -> None:
+        self.notify_error("You are offline. Cloud features are temporarily unavailable.")
+
+    def handle_network_online(self) -> None:
+        self.notify_info("Connection restored. Syncing latest data...")
+        self.request_background_sync("network-restored", {"full", "users"}, delay_ms=0)
+
+    def notify_success(self, message: str) -> None:
+        if self.notifications is not None:
+            self.notifications.notify_success(message)
+            return
+        self.statusBar().showMessage(message, 5000)
+
+    def notify_info(self, message: str) -> None:
+        if self.notifications is not None:
+            self.notifications.notify_info(message)
+            return
+        self.statusBar().showMessage(message, 5000)
+
+    def notify_warning(self, message: str) -> None:
+        if self.notifications is not None:
+            self.notifications.notify_warning(message)
+            return
+        self.statusBar().showMessage(message, 5000)
+
+    def notify_error(self, message: str) -> None:
+        if self.notifications is not None:
+            self.notifications.notify_error(message)
+            return
+        self.statusBar().showMessage(message, 5000)
 
     def connect_global_refresh(self) -> None:
         self.app_data_changed.connect(self.reload_data)
@@ -435,7 +480,7 @@ class PosMainWindow(QMainWindow):
             self.background_sync_pending_kinds.update(kinds)
             if self.background_sync_timer is not None:
                 self.background_sync_timer.start(5000)
-            self.statusBar().showMessage(f"Background sync skipped: {error}", 5000)
+            self.notify_warning(friendly_error(error))
 
         if not self.background_task_runner.start(sync_task, on_success, on_error):
             self.cloud_sync_running = False
@@ -451,7 +496,7 @@ class PosMainWindow(QMainWindow):
         try:
             from pos_terminal.realtime_worker import RealtimeSyncWorker
         except Exception as error:
-            self.statusBar().showMessage(f"Realtime sync unavailable: {error}", 5000)
+            self.notify_warning(friendly_error(error))
             return
 
         self.realtime_thread = QThread(self)
@@ -481,7 +526,7 @@ class PosMainWindow(QMainWindow):
     def show_realtime_status(self, message: str) -> None:
         lowered = message.lower()
         if any(word in lowered for word in ("error", "failed", "stopped", "unavailable", "disconnected")):
-            self.statusBar().showMessage(message, 5000)
+            self.notify_warning(friendly_error(message))
 
     def queue_realtime_sync(self, kinds: object) -> None:
         self.request_background_sync("realtime", kinds)
@@ -905,11 +950,11 @@ class PosMainWindow(QMainWindow):
                 IconManager.icon("sidebar_expand" if collapsed else "sidebar_collapse")
             )
         QTimer.singleShot(0, self.position_sidebar_toggle_button)
+        QTimer.singleShot(0, self.position_notification_toast)
 
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self.position_sidebar_toggle_button()
-
+    def position_notification_toast(self) -> None:
+        if self.notifications is not None:
+            self.notifications.position()
 
     def switch_page(self, page_index: int) -> None:
         products_index = self.page_indexes.get("products")
@@ -929,6 +974,7 @@ class PosMainWindow(QMainWindow):
         elif page_index == products_index and self.product_management_page is not None:
             if not getattr(self.product_management_page, "products_loaded", False):
                 self.product_management_page.load_products()
+        self.position_notification_toast()
 
     def create_content_area(self) -> QWidget:
         container = QWidget()
@@ -1787,7 +1833,7 @@ class PosMainWindow(QMainWindow):
             def on_error(error: Exception) -> None:
                 confirm_button.setEnabled(True)
                 self.request_background_sync("checkout-recovery", {"full"}, delay_ms=0)
-                QMessageBox.warning(dialog, "Inventory Error", str(error))
+                QMessageBox.warning(dialog, "Payment Error", friendly_error(error))
 
             confirm_button.setEnabled(False)
             if not checkout_runner.start(
@@ -1984,7 +2030,7 @@ class PosMainWindow(QMainWindow):
             def on_error(error: Exception) -> None:
                 confirm_button.setEnabled(True)
                 self.request_background_sync("checkout-recovery", {"full"}, delay_ms=0)
-                QMessageBox.warning(dialog, "Inventory Error", str(error))
+                QMessageBox.warning(dialog, "Payment Error", friendly_error(error))
 
             confirm_button.setEnabled(False)
             if not checkout_runner.start(
@@ -2257,6 +2303,11 @@ class PosMainWindow(QMainWindow):
         paper_layout.addWidget(receipt_label, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(receipt_paper, 0, Qt.AlignmentFlag.AlignCenter)
 
+        print_button = QPushButton("Print Receipt")
+        print_button.setObjectName("primaryDialogButton")
+        IconManager.apply_button(print_button, "print", IconManager.LIGHT)
+        print_button.clicked.connect(lambda: self.print_receipt(receipt_text))
+
         close_button = QPushButton("Close")
         close_button.setObjectName("primaryDialogButton")
         IconManager.apply_button(close_button, "close", IconManager.LIGHT)
@@ -2264,6 +2315,7 @@ class PosMainWindow(QMainWindow):
 
         button_layout = QHBoxLayout()
         button_layout.addStretch()
+        button_layout.addWidget(print_button)
         button_layout.addWidget(close_button)
         button_layout.addStretch()
         layout.addLayout(button_layout)
@@ -2298,6 +2350,42 @@ class PosMainWindow(QMainWindow):
         dialog.setFixedSize(dialog.sizeHint())
         dialog.exec()
 
+    def print_receipt(self, receipt_text: str) -> None:
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setDocName("Sales Receipt")
+        preview = QPrintPreviewDialog(printer, self)
+        preview.setWindowTitle("Print Preview - Receipt")
+        preview.resize(420, 720)
+        preview.paintRequested.connect(lambda printer: self.render_receipt_to_printer(printer, receipt_text))
+        preview.exec()
+
+    def render_receipt_to_printer(self, printer: QPrinter, receipt_text: str) -> None:
+        document = QTextDocument(self)
+        document.setHtml(self.build_receipt_print_html(receipt_text))
+        document.print(printer)
+
+    def build_receipt_print_html(self, receipt_text: str) -> str:
+        return f"""
+        <html>
+            <head>
+                <style>
+                    body {{
+                        color: #111827;
+                        font-family: "Courier New", monospace;
+                        font-size: 10pt;
+                    }}
+                    pre {{
+                        margin: 0;
+                        white-space: pre;
+                    }}
+                </style>
+            </head>
+            <body>
+                <pre>{escape(receipt_text)}</pre>
+            </body>
+        </html>
+        """
+
     def clear_current_sale(self) -> None:
         self.cart_items.clear()
         self.populate_cart()
@@ -2310,6 +2398,11 @@ class PosMainWindow(QMainWindow):
         super().showEvent(event)
         self.search_input.setFocus()
         self.search_input.selectAll()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.position_sidebar_toggle_button()
+        self.position_notification_toast()
 
     def closeEvent(self, event) -> None:
         self.stop_realtime_sync()
@@ -2829,4 +2922,5 @@ def build_stylesheet() -> str:
 def configure_app_font(app) -> None:
     app.setStyle("Fusion")
     app.setStyleSheet(build_stylesheet() + MODERN_WIDGET_STYLESHEET)
+    install_combobox_popup_fix(app)
     app.setFont(QFont("Segoe UI", 10))

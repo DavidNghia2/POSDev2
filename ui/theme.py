@@ -2,10 +2,130 @@
 
 from pathlib import Path
 
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
+from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtWidgets import QApplication, QComboBox, QFrame
+
 
 ASSETS_DIR = Path(__file__).resolve().parents[1] / "assets"
 CHECK_ICON_URL = (ASSETS_DIR / "ui_check.svg").as_posix()
 RADIO_DOT_ICON_URL = (ASSETS_DIR / "ui_radio_dot.svg").as_posix()
+
+
+COMBO_POPUP_STYLESHEET = """
+QListView,
+QAbstractItemView {
+    background: #FFFFFF;
+    background-color: #FFFFFF;
+    border: 1px solid #CBD5E1;
+    border-radius: 0;
+    margin: 0;
+    outline: 0;
+    padding: 0;
+    selection-background-color: #2563EB;
+    selection-color: #FFFFFF;
+}
+
+QListView::item,
+QAbstractItemView::item {
+    background: #FFFFFF;
+    color: #0F172A;
+    min-height: 28px;
+    padding: 6px 10px;
+}
+
+QListView::item:hover,
+QListView::item:selected,
+QAbstractItemView::item:hover,
+QAbstractItemView::item:selected {
+    background: #2563EB;
+    color: #FFFFFF;
+}
+"""
+
+
+def apply_combobox_popup_fix(combo: QComboBox) -> None:
+    """Keep combo popups from showing native black corners on Windows/Fusion."""
+    view = combo.view()
+    if view is None:
+        return
+
+    container = view.parentWidget()
+    if container is not None:
+        container_palette = container.palette()
+        container_palette.setColor(QPalette.ColorRole.Base, QColor("#FFFFFF"))
+        container_palette.setColor(QPalette.ColorRole.Window, QColor("#FFFFFF"))
+        container.setPalette(container_palette)
+        container.setAutoFillBackground(True)
+        container.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        container.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+        container.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+        container.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        container.setStyleSheet(
+            """
+            QFrame {
+                background: #FFFFFF;
+                background-color: #FFFFFF;
+                border: none;
+                border-radius: 0;
+                margin: 0;
+                padding: 0;
+            }
+            """
+        )
+
+    if combo.property("_retail_pos_combo_popup_fixed"):
+        return
+
+    palette = view.palette()
+    for role in (
+        QPalette.ColorRole.Base,
+        QPalette.ColorRole.Window,
+        QPalette.ColorRole.AlternateBase,
+    ):
+        palette.setColor(role, QColor("#FFFFFF"))
+    view.setPalette(palette)
+    view.viewport().setPalette(palette)
+
+    view.setAutoFillBackground(True)
+    view.viewport().setAutoFillBackground(True)
+    view.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    view.viewport().setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    view.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+    view.viewport().setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, False)
+    view.setFrameShape(QFrame.Shape.NoFrame)
+    view.setWindowFlag(Qt.WindowType.NoDropShadowWindowHint, True)
+    view.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+    view.setStyleSheet(COMBO_POPUP_STYLESHEET)
+    combo.setProperty("_retail_pos_combo_popup_fixed", True)
+
+
+class ComboBoxPopupFixer(QObject):
+    def eventFilter(self, watched, event) -> bool:
+        if isinstance(watched, QComboBox) and event.type() in {
+            QEvent.Type.Polish,
+            QEvent.Type.Show,
+        }:
+            QTimer.singleShot(0, lambda combo=watched: apply_combobox_popup_fix(combo))
+        elif isinstance(watched, QFrame) and event.type() in {
+            QEvent.Type.Polish,
+            QEvent.Type.Show,
+        }:
+            parent = watched.parent()
+            if isinstance(parent, QComboBox):
+                QTimer.singleShot(0, lambda combo=parent: apply_combobox_popup_fix(combo))
+        return False
+
+
+def install_combobox_popup_fix(app: QApplication) -> None:
+    if getattr(app, "_retail_pos_combo_popup_fixer", None) is None:
+        fixer = ComboBoxPopupFixer(app)
+        app.installEventFilter(fixer)
+        app._retail_pos_combo_popup_fixer = fixer
+
+    for widget in app.allWidgets():
+        if isinstance(widget, QComboBox):
+            apply_combobox_popup_fix(widget)
 
 
 MODERN_WIDGET_STYLESHEET = """
@@ -57,6 +177,7 @@ QTextEdit:focus {
 }
 
 QComboBox {
+    combobox-popup: 0;
     padding-right: 30px;
 }
 
@@ -71,11 +192,25 @@ QDateEdit::drop-down {
 QComboBox QAbstractItemView {
     background: #FFFFFF;
     border: 1px solid #CBD5E1;
-    border-radius: 8px;
+    border-radius: 0;
     outline: 0;
-    padding: 6px;
-    selection-background-color: #DBEAFE;
-    selection-color: #0F172A;
+    padding: 0;
+    margin: 0;
+    selection-background-color: #2563EB;
+    selection-color: #FFFFFF;
+}
+
+QComboBox QAbstractItemView::item {
+    background: #FFFFFF;
+    color: #0F172A;
+    min-height: 28px;
+    padding: 6px 10px;
+}
+
+QComboBox QAbstractItemView::item:hover,
+QComboBox QAbstractItemView::item:selected {
+    background: #2563EB;
+    color: #FFFFFF;
 }
 
 QCheckBox {

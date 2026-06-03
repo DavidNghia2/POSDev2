@@ -609,12 +609,11 @@ class ReportsWindow(QWidget):
             QMenu {
                 background: #FFFFFF;
                 border: 1px solid #D8E0E8;
-                border-radius: 8px;
-                padding: 6px;
+                border-radius: 0;
+                padding: 0;
             }
 
             QMenu::item {
-                border-radius: 6px;
                 padding: 8px 18px;
             }
 

@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 from login import get_setting, log_audit, set_setting
 from ui.currency import CURRENCY_OPTIONS, DEFAULT_CURRENCY_SYMBOL, normalize_currency_symbol
 from ui.icon_manager import IconManager
+from ui.notifications import friendly_error
 from ui.theme import MODERN_WIDGET_STYLESHEET
 from ui.qr_display import qr_focus_pixmap
 
@@ -279,9 +280,6 @@ class SettingsWindow(QWidget):
 
         layout.addLayout(form_layout)
 
-        self.print_receipt_checkbox = QCheckBox("Auto-print receipts")
-        self.print_receipt_checkbox.setObjectName("settingsToggle")
-        layout.addWidget(self.print_receipt_checkbox)
         layout.addStretch(1)
 
         self.save_receipt_button = QPushButton("Save")
@@ -382,7 +380,6 @@ class SettingsWindow(QWidget):
         self.currency_combo.setCurrentIndex(max(currency_index, 0))
         self.receipt_header_input.setPlainText(get_setting("receipt_header") or "Thank You!")
         self.receipt_footer_input.setPlainText(get_setting("receipt_footer") or "Please come again")
-        self.print_receipt_checkbox.setChecked(get_setting("auto_print") != "false")
 
         self.enable_bank_transfer_checkbox.setChecked(get_setting("enable_bank_transfer") != "false")
         self.saved_qr_image_path = get_setting(PAYMENT_QR_SETTING_KEY) or ""
@@ -466,7 +463,6 @@ class SettingsWindow(QWidget):
         set_setting("currency", currency_symbol)
         set_setting("receipt_header", self.receipt_header_input.toPlainText().strip())
         set_setting("receipt_footer", self.receipt_footer_input.toPlainText().strip())
-        set_setting("auto_print", "true" if self.print_receipt_checkbox.isChecked() else "false")
 
         log_audit(self.current_user["id"], "UPDATE_SETTINGS", "settings", None, None, "receipt_settings")
 
@@ -478,7 +474,7 @@ class SettingsWindow(QWidget):
             try:
                 self.saved_qr_image_path = self.persist_qr_image(self.selected_qr_source_path)
             except OSError as error:
-                QMessageBox.warning(self, "QR Image Error", f"Could not save QR image: {error}")
+                QMessageBox.warning(self, "QR Image Error", friendly_error(error))
                 return
 
         set_setting(

@@ -23,6 +23,7 @@ from login import (
 )
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
+from ui.notifications import friendly_error
 from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
@@ -232,7 +233,7 @@ class RegisterManagementWindow(QWidget):
             register_id = add_register(name, location)
             log_audit(self.current_user["id"], "CREATE_REGISTER", "registers", register_id, None, f"name: {name}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+            QMessageBox.warning(self, "Error", friendly_error(e))
             return
         
         self.clear_form()
@@ -256,7 +257,7 @@ class RegisterManagementWindow(QWidget):
             update_register(self.selected_register_id, name, location)
             log_audit(self.current_user["id"], "UPDATE_REGISTER", "registers", self.selected_register_id, None, f"name: {name}")
         except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+            QMessageBox.warning(self, "Error", friendly_error(e))
             return
         
         self.clear_form()
@@ -279,7 +280,7 @@ class RegisterManagementWindow(QWidget):
             delete_register(self.selected_register_id)
             log_audit(self.current_user["id"], "DELETE_REGISTER", "registers", self.selected_register_id)
         except Exception as e:
-            QMessageBox.warning(self, "Error", str(e))
+            QMessageBox.warning(self, "Error", friendly_error(e))
             return
         
         self.clear_form()

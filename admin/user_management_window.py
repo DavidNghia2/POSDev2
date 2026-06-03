@@ -33,6 +33,7 @@ from login import (
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.loading import BlockingTaskRunner, USER_SYNC_TIMEOUT_MS
+from ui.notifications import friendly_error
 from ui.theme import MODERN_WIDGET_STYLESHEET
 
 
@@ -184,7 +185,7 @@ class UserEditDialog(QDialog):
             self.accept()
 
         def on_error(error: Exception) -> None:
-            self.feedback_label.setText(str(error))
+            self.feedback_label.setText(friendly_error(error))
             self.save_button.setEnabled(True)
             self.save_button.setText("Save")
 
@@ -546,8 +547,9 @@ class UserManagementWindow(QWidget):
         try:
             refresh_store_users_from_cloud()
         except Exception as error:
-            self.set_status(f"Could not refresh users: {error}", is_error=True)
-            self.show_toast(f"Could not refresh users: {error}", is_error=True)
+            message = friendly_error(error)
+            self.set_status(message, is_error=True)
+            self.show_toast(message, is_error=True)
             return
         self.load_users()
         self.set_status("Users updated.")
@@ -681,8 +683,9 @@ class UserManagementWindow(QWidget):
             self.set_user_action_busy(None)
             if action != "create":
                 self.load_users()
-            self.set_status(str(error), is_error=True)
-            self.show_toast(str(error), is_error=True)
+            message = friendly_error(error)
+            self.set_status(message, is_error=True)
+            self.show_toast(message, is_error=True)
 
         self.set_status(message)
         self.set_user_action_busy(action)

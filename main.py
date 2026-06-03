@@ -16,7 +16,7 @@ def main() -> int:
     init_auth_db()
     
     while True:
-        user = get_persisted_user() or show_login()
+        user = get_persisted_user() or show_login()     
         if user is None:
             print("Login cancelled")
             return 0

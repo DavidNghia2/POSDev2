@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.icon_manager import IconManager
 from ui.loading import BackgroundTaskRunner
+from ui.notifications import friendly_error
 from ui.theme import MODERN_WIDGET_STYLESHEET
 from app_paths import database_path
 from cloud import auth as cloud_auth
@@ -1642,7 +1643,7 @@ class LoginWindow(QDialog):
             self.complete_auth_success("LOGIN")
 
         def on_error(error: Exception) -> None:
-            self.set_feedback(self.error_label, str(error))
+            self.set_feedback(self.error_label, friendly_error(error))
             self.password_input.clear()
             self.set_login_busy(False)
 
@@ -1703,7 +1704,7 @@ class LoginWindow(QDialog):
             )
 
         def on_error(error: Exception) -> None:
-            self.set_feedback(self.register_error_label, str(error))
+            self.set_feedback(self.register_error_label, friendly_error(error))
             self.register_password_input.clear()
             self.register_confirm_input.clear()
             self.set_register_busy(False)
