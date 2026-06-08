@@ -441,8 +441,8 @@ class SettingsWindow(QWidget):
         if mode == THEME_DARK:
             styles = """
             QWidget {
-                background: #0F172A;
-                color: #E5E7EB;
+                background: #101820;
+                color: #E6EDF3;
                 font-family: "Segoe UI";
                 font-size: 13px;
             }
@@ -452,18 +452,18 @@ class SettingsWindow(QWidget):
             }
 
             #titleLabel {
-                color: #F3F4F6;
+                color: #F5F8FA;
                 font-size: 26px;
                 font-weight: 700;
             }
 
             #subtitleLabel {
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 13px;
             }
 
             #sectionLabel {
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-size: 16px;
                 font-weight: 700;
             }
@@ -478,9 +478,9 @@ class SettingsWindow(QWidget):
             }
 
             QTabBar::tab {
-                background: #1E293B;
-                color: #9CA3AF;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                color: #A7B3C2;
+                border: 1px solid #314154;
                 border-radius: 9px;
                 padding: 9px 15px;
                 margin-right: 7px;
@@ -488,19 +488,19 @@ class SettingsWindow(QWidget):
             }
 
             QTabBar::tab:selected {
-                background: #3B82F6;
+                background: #60A5FA;
                 color: #FFFFFF;
-                border-color: #3B82F6;
+                border-color: #60A5FA;
             }
 
             QTabBar::tab:hover:!selected {
-                background: #475569;
-                color: #E5E7EB;
+                background: #46586A;
+                color: #E6EDF3;
             }
 
             #panel {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 12px;
             }
 
@@ -510,48 +510,48 @@ class SettingsWindow(QWidget):
             }
 
             #qrPreviewCard {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 14px;
                 min-width: 330px;
             }
 
             #previewTitle {
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-size: 15px;
                 font-weight: 800;
             }
 
             #formLabel {
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 12px;
                 font-weight: 700;
             }
 
             #helperText {
                 background: transparent;
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 12px;
             }
 
             QLineEdit {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 8px;
                 padding: 10px 12px;
                 min-height: 18px;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QLineEdit:focus {
-                border: 1px solid #3B82F6;
+                border: 1px solid #60A5FA;
             }
 
             #settingsSelect {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 8px;
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-weight: 600;
                 min-height: 40px;
                 min-width: 320px;
@@ -559,13 +559,13 @@ class SettingsWindow(QWidget):
             }
 
             #settingsSelect:hover {
-                background: #0F172A;
-                border: 1px solid #475569;
+                background: #101820;
+                border: 1px solid #46586A;
             }
 
             #settingsSelect:focus,
             #settingsSelect:on {
-                border: 1px solid #3B82F6;
+                border: 1px solid #60A5FA;
             }
 
             #settingsSelect::drop-down {
@@ -583,17 +583,17 @@ class SettingsWindow(QWidget):
             #settingsSelect QLineEdit {
                 background: transparent;
                 border: none;
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-weight: 600;
                 padding: 0;
                 min-height: 36px;
             }
 
             #settingsSelectList {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 8px;
-                color: #E5E7EB;
+                color: #E6EDF3;
                 outline: none;
                 padding: 6px;
             }
@@ -607,7 +607,7 @@ class SettingsWindow(QWidget):
             #settingsSelectList::item:hover,
             #settingsSelectList::item:selected {
                 background: #1E3A5F;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QPushButton {
@@ -621,7 +621,7 @@ class SettingsWindow(QWidget):
             }
 
             #primaryButton {
-                background: #3B82F6;
+                background: #60A5FA;
             }
 
             #secondaryButton {
@@ -637,27 +637,27 @@ class SettingsWindow(QWidget):
                 background: transparent;
                 spacing: 7px;
                 font-weight: 600;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QCheckBox::indicator {
                 width: 17px;
                 height: 17px;
-                border: 1px solid #475569;
+                border: 1px solid #46586A;
                 border-radius: 5px;
-                background: #1E293B;
+                background: #1F2A37;
             }
 
             QCheckBox::indicator:checked {
-                background: #3B82F6;
-                border-color: #3B82F6;
+                background: #60A5FA;
+                border-color: #60A5FA;
             }
 
             #qrPreview {
-                background: #0F172A;
-                border: 1px dashed #475569;
+                background: #101820;
+                border: 1px dashed #46586A;
                 border-radius: 12px;
-                color: #9CA3AF;
+                color: #A7B3C2;
                 font-weight: 700;
             }
             """
@@ -865,7 +865,7 @@ class SettingsWindow(QWidget):
             QCheckBox::indicator {
                 width: 17px;
                 height: 17px;
-                border: 1px solid #94A3B8;
+                border: 1px solid #A7B3C2;
                 border-radius: 5px;
                 background: #FFFFFF;
             }
@@ -877,7 +877,7 @@ class SettingsWindow(QWidget):
 
             #qrPreview {
                 background: #FFFFFF;
-                border: 1px dashed #94A3B8;
+                border: 1px dashed #A7B3C2;
                 border-radius: 12px;
                 color: #64707D;
                 font-weight: 700;

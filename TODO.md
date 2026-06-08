@@ -1,10 +1,11 @@
-# Theme Mode Implementation TODO
+# Theme Mode Implementation
 
-- [ ] Add light/dark theme mode support helpers in `ui/theme.py`
-- [ ] Make combobox popup fix use dynamic colors based on current theme
-- [ ] Add mode-aware stylesheet builder in `ui/theme.py`
-- [ ] Update `pos_terminal/pos_window.py` to consume mode-aware theme builders
-- [ ] Add in-app runtime toggle action/button for light/dark mode
-- [ ] Reapply stylesheet instantly on toggle
-- [ ] Run syntax validation
-- [ ] Mark completion
+- [x] Add light/dark theme mode support helpers in `ui/theme.py`
+- [x] Make combobox popup fix use dynamic colors based on current theme
+- [x] Add mode-aware stylesheet builder in `ui/theme.py`
+- [x] Update `pos_terminal/pos_window.py` to consume mode-aware theme builders
+- [x] Add in-app runtime toggle action/button for light/dark mode
+- [x] Reapply stylesheet instantly on toggle across open widgets and dialogs
+- [x] Make Product Management styles build from the current runtime theme
+- [x] Remove stale one-off theme patch script
+- [x] Run syntax validation

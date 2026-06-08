@@ -455,38 +455,38 @@ class AdminDashboardWindow(QWidget):
         if mode == THEME_DARK:
             styles = """
             QWidget {
-                background: #0F172A;
-                color: #E5E7EB;
+                background: #101820;
+                color: #E6EDF3;
                 font-family: "Segoe UI";
                 font-size: 13px;
             }
 
             #titleLabel {
-                color: #F3F4F6;
+                color: #F5F8FA;
                 font-size: 26px;
                 font-weight: 700;
             }
 
             #subtitleLabel {
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 13px;
             }
 
             #sectionLabel {
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-size: 15px;
                 font-weight: 700;
             }
 
             #panel {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 10px;
             }
 
             #statCard {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 10px;
                 min-width: 180px;
             }
@@ -496,19 +496,19 @@ class AdminDashboardWindow(QWidget):
             }
 
             #statTitle {
-                color: #9CA3AF;
+                color: #A7B3C2;
                 font-size: 12px;
                 font-weight: 600;
             }
 
             #statValue {
-                color: #F3F4F6;
+                color: #F5F8FA;
                 font-size: 24px;
                 font-weight: 800;
             }
 
             #statSubtitle {
-                color: #6B7280;
+                color: #7B8A9A;
                 font-size: 11px;
             }
 
@@ -518,7 +518,7 @@ class AdminDashboardWindow(QWidget):
             }
 
             #paymentCount {
-                color: #9CA3AF;
+                color: #A7B3C2;
             }
 
             #paymentAmount {
@@ -531,7 +531,7 @@ class AdminDashboardWindow(QWidget):
             }
 
             #productQty {
-                color: #9CA3AF;
+                color: #A7B3C2;
             }
 
             #productSales {
@@ -540,7 +540,7 @@ class AdminDashboardWindow(QWidget):
             }
 
             #noDataLabel {
-                color: #6B7280;
+                color: #7B8A9A;
                 font-style: italic;
             }
 
@@ -549,15 +549,15 @@ class AdminDashboardWindow(QWidget):
             }
 
             QDateEdit {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 8px;
                 padding: 8px 12px;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QDateEdit:focus {
-                border: 1px solid #3B82F6;
+                border: 1px solid #60A5FA;
             }
 
             QDateEdit::drop-down {
@@ -621,7 +621,7 @@ class AdminDashboardWindow(QWidget):
             }
 
             #statSubtitle {
-                color: #94A3B8;
+                color: #A7B3C2;
                 font-size: 11px;
             }
 
@@ -653,7 +653,7 @@ class AdminDashboardWindow(QWidget):
             }
 
             #noDataLabel {
-                color: #94A3B8;
+                color: #A7B3C2;
                 font-style: italic;
             }
 

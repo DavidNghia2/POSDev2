@@ -3,7 +3,7 @@ import sys
 from PyQt6.QtWidgets import QApplication
 
 from login import get_persisted_user, init_auth_db, show_login
-from pos_terminal.pos_window import PosMainWindow, configure_app_font
+from pos_terminal.pos_window import PosMainWindow, apply_current_theme, configure_app_font
 from ui.app_branding import apply_app_icon
 
 
@@ -23,6 +23,7 @@ def main() -> int:
 
         print(f"Logged in as: {user['full_name']} ({user['role_name']})")
 
+        apply_current_theme(app)
         window = PosMainWindow(user_data=user)
         apply_app_icon(window)
         window.statusBar().showMessage(f"POS terminal ready - Logged in as {user['full_name']}")

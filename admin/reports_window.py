@@ -374,7 +374,7 @@ class ReportsWindow(QWidget):
                         margin-bottom: 4px;
                     }}
                     .meta {{
-                        color: #4B5563;
+                        color: #546577;
                         margin-bottom: 18px;
                     }}
                     table {{
@@ -382,12 +382,12 @@ class ReportsWindow(QWidget):
                         border-collapse: collapse;
                     }}
                     th, td {{
-                        border: 1px solid #D1D5DB;
+                        border: 1px solid #C8D3DF;
                         padding: 8px;
                         text-align: center;
                     }}
                     th {{
-                        background: #E5E7EB;
+                        background: #E6EDF3;
                     }}
                 </style>
             </head>
@@ -558,73 +558,73 @@ class ReportsWindow(QWidget):
         if mode == THEME_DARK:
             styles = """
             QWidget {
-                background: #0F172A;
-                color: #E5E7EB;
+                background: #101820;
+                color: #E6EDF3;
                 font-family: "Segoe UI";
                 font-size: 13px;
             }
 
             #titleLabel {
-                color: #F3F4F6;
+                color: #F5F8FA;
                 font-size: 26px;
                 font-weight: 700;
             }
 
             #subtitleLabel {
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 13px;
             }
 
             #panel {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 10px;
             }
 
             QComboBox, QDateEdit {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 8px;
                 padding: 8px 12px;
                 min-width: 120px;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QComboBox:focus, QDateEdit:focus {
-                border: 1px solid #3B82F6;
+                border: 1px solid #60A5FA;
             }
 
             #filterButton {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 6px;
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-weight: 600;
                 padding: 8px 12px;
             }
 
             #filterButton:hover {
-                background: #334155;
+                background: #314154;
             }
 
             QMenu {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 0;
                 padding: 0;
             }
 
             QMenu::item {
                 padding: 8px 18px;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QMenu::item:selected {
-                background: #334155;
+                background: #314154;
             }
 
             #primaryButton {
-                background: #3B82F6;
+                background: #60A5FA;
                 border: none;
                 border-radius: 6px;
                 color: #FFFFFF;
@@ -637,25 +637,25 @@ class ReportsWindow(QWidget):
             }
 
             QTableWidget {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 8px;
-                alternate-background-color: #0F172A;
+                alternate-background-color: #101820;
                 gridline-color: transparent;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QHeaderView::section {
-                background: #1E293B;
+                background: #1F2A37;
                 border: none;
-                border-bottom: 1px solid #334155;
-                color: #E5E7EB;
+                border-bottom: 1px solid #314154;
+                color: #E6EDF3;
                 font-weight: 700;
                 padding: 10px;
             }
 
             QTableWidget::item {
-                border-bottom: 1px solid #1E293B;
+                border-bottom: 1px solid #1F2A37;
                 padding: 8px;
             }
             """
@@ -698,7 +698,7 @@ class ReportsWindow(QWidget):
             }
 
             #filterButton {
-                background: #F3F4F6;
+                background: #F5F8FA;
                 border: 1px solid #D8E0E8;
                 border-radius: 6px;
                 color: #374151;
@@ -707,7 +707,7 @@ class ReportsWindow(QWidget):
             }
 
             #filterButton:hover {
-                background: #E5E7EB;
+                background: #E6EDF3;
             }
 
             QMenu {
@@ -722,7 +722,7 @@ class ReportsWindow(QWidget):
             }
 
             QMenu::item:selected {
-                background: #E5E7EB;
+                background: #E6EDF3;
             }
 
             #primaryButton {

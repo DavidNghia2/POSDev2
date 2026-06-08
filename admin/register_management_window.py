@@ -304,51 +304,51 @@ class RegisterManagementWindow(QWidget):
         if mode == THEME_DARK:
             styles = """
             QWidget {
-                background: #0F172A;
-                color: #E5E7EB;
+                background: #101820;
+                color: #E6EDF3;
                 font-family: "Segoe UI";
                 font-size: 13px;
             }
 
             #titleLabel {
-                color: #F3F4F6;
+                color: #F5F8FA;
                 font-size: 26px;
                 font-weight: 700;
             }
 
             #subtitleLabel {
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 13px;
             }
 
             #sectionLabel {
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-size: 15px;
                 font-weight: 700;
             }
 
             #panel {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 10px;
             }
 
             #formLabel {
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 12px;
                 font-weight: 600;
             }
 
             QLineEdit {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 8px;
                 padding: 10px 12px;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QLineEdit:focus {
-                border: 1px solid #3B82F6;
+                border: 1px solid #60A5FA;
             }
 
             QPushButton {
@@ -360,7 +360,7 @@ class RegisterManagementWindow(QWidget):
             }
 
             #primaryButton {
-                background: #3B82F6;
+                background: #60A5FA;
             }
 
             #secondaryButton {
@@ -372,7 +372,7 @@ class RegisterManagementWindow(QWidget):
             }
             
             #neutralButton {
-                background: #475569;
+                background: #46586A;
             }
 
             QPushButton:pressed {
@@ -381,25 +381,25 @@ class RegisterManagementWindow(QWidget):
             }
 
             QTableWidget {
-                background: #111827;
-                border: 1px solid #334155;
+                background: #17212B;
+                border: 1px solid #314154;
                 border-radius: 8px;
-                alternate-background-color: #0F172A;
+                alternate-background-color: #101820;
                 gridline-color: transparent;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
 
             QHeaderView::section {
-                background: #1E293B;
+                background: #1F2A37;
                 border: none;
-                border-bottom: 1px solid #334155;
-                color: #E5E7EB;
+                border-bottom: 1px solid #314154;
+                color: #E6EDF3;
                 font-weight: 700;
                 padding: 10px;
             }
 
             QTableWidget::item {
-                border-bottom: 1px solid #1E293B;
+                border-bottom: 1px solid #1F2A37;
                 padding: 8px;
             }
             """
@@ -473,7 +473,7 @@ class RegisterManagementWindow(QWidget):
             }
             
             #neutralButton {
-                background: #6B7280;
+                background: #7B8A9A;
             }
 
             QPushButton:pressed {

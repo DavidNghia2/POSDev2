@@ -1,5 +1,7 @@
 import sqlite3
 import hashlib
+import re
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,7 +26,7 @@ from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.icon_manager import IconManager
 from ui.loading import BackgroundTaskRunner
 from ui.notifications import friendly_error
-from ui.theme import build_modern_widget_stylesheet, THEME_DARK, THEME_LIGHT, get_theme_mode, set_theme_mode
+from ui.theme import THEME_LIGHT, build_modern_widget_stylesheet
 from app_paths import database_path
 from cloud import auth as cloud_auth
 from cloud import inventory as cloud_inventory
@@ -43,6 +45,34 @@ GLOBAL_SETTING_KEYS = {
     "current_store_id",
     "remember_login",
 }
+
+
+@dataclass(frozen=True)
+class LoginCredentials:
+    email: str
+    password: str
+
+
+@dataclass(frozen=True)
+class StoreRegistrationForm:
+    store_name: str
+    full_name: str
+    email: str
+    password: str
+    confirm_password: str
+
+
+@dataclass(frozen=True)
+class RegistrationIssue:
+    fields: tuple[str, ...]
+    message: str
+
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def is_valid_email_address(email: str) -> bool:
+    return bool(EMAIL_PATTERN.match(email))
 
 
 def get_connection() -> sqlite3.Connection:
@@ -1258,6 +1288,191 @@ class ToggleSwitch(QPushButton):
             painter.drawLine(36, 10, 30, 16)
 
 
+def build_login_stylesheet() -> str:
+    return """
+QDialog {
+    background: #DDE1E6;
+}
+
+QLabel {
+    background: transparent;
+}
+
+#tabletFrame {
+    background: #FFFFFF;
+    border: 34px solid #F7F7F7;
+    border-radius: 42px;
+}
+
+#appTitle {
+    color: #050505;
+    font-size: 30px;
+    font-weight: 900;
+}
+
+#appSubtitle {
+    color: #0F1115;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+#creatorCredit {
+    color: #64748B;
+    font-size: 11px;
+    font-weight: 600;
+}
+
+#loginCard {
+    background: #FFFFFF;
+    border-radius: 12px;
+}
+
+#authStack {
+    background: transparent;
+}
+
+#loginTitle {
+    color: #050505;
+    font-size: 28px;
+    font-weight: 900;
+}
+
+#authHint {
+    color: #64748B;
+    font-size: 12px;
+    font-weight: 650;
+}
+
+#inputRow {
+    background: #F8FAFC;
+    border: 1px solid #E1E6EE;
+    border-radius: 7px;
+}
+
+#inputRow[focused="true"] {
+    background: #FFFFFF;
+    border: 2px solid #3B82F6;
+    border-radius: 7px;
+}
+
+#inputRow[invalid="true"] {
+    background: #FFF7F7;
+    border: 2px solid #DC2626;
+    border-radius: 7px;
+}
+
+#inputRow[invalid="true"][focused="true"] {
+    background: #FFFFFF;
+    border: 2px solid #B91C1C;
+    border-radius: 7px;
+}
+
+#inputRow[invalid="true"] #iconSeparator {
+    background: #FCA5A5;
+}
+
+#iconSeparator {
+    background: #EEF1F5;
+    border: none;
+    min-height: 22px;
+    max-height: 22px;
+}
+
+#cardInput {
+    background: transparent;
+    border: none;
+    color: #111111;
+    font-size: 14px;
+    padding: 0;
+    min-height: 34px;
+}
+
+#inputRow #cardInput,
+#inputRow[focused="true"] #cardInput {
+    background: transparent;
+    border: none;
+}
+
+#passwordToggleButton {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    min-width: 20px;
+    max-width: 20px;
+    min-height: 24px;
+    max-height: 24px;
+    padding: 0;
+}
+
+#passwordToggleButton:hover {
+    background: #F2F7FF;
+}
+
+#rememberLabel {
+    color: #1F2933;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+#loginButton {
+    background: #1F77FF;
+    border: none;
+    border-radius: 8px;
+    color: #FFFFFF;
+    font-size: 18px;
+    font-weight: 800;
+}
+
+#loginButton:hover {
+    background: #1768E8;
+}
+
+#loginButton:pressed {
+    background: #1157C7;
+}
+
+#registerButton {
+    background: #EEF5FF;
+    border: 1px solid #CFE1FF;
+    border-radius: 8px;
+    color: #1D4ED8;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+#registerButton:hover {
+    background: #E1EEFF;
+}
+
+#errorLabel {
+    color: #DC2626;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 16px;
+    padding: 0;
+    border: none;
+    background: transparent;
+}
+
+#errorLabel[feedback="error"],
+#errorLabel[feedback="validation"] {
+    color: #B91C1C;
+    background: #FEF2F2;
+    border: 1px solid #FECACA;
+    border-radius: 7px;
+    padding: 6px 8px;
+}
+
+#errorLabel[feedback="success"] {
+    color: #059669;
+    background: #ECFDF5;
+    border: 1px solid #A7F3D0;
+    border-radius: 7px;
+    padding: 6px 8px;
+}
+"""
+
+
 class LoginWindow(QDialog):
     def __init__(self) -> None:
         super().__init__()
@@ -1266,6 +1481,7 @@ class LoginWindow(QDialog):
         self.auth_loading_button: QPushButton | None = None
         self.auth_loading_base_text = ""
         self.auth_loading_dots = 0
+        self.register_inputs: dict[str, QLineEdit] = {}
         self.auth_loading_timer = QTimer(self)
         self.auth_loading_timer.setInterval(350)
         self.auth_loading_timer.timeout.connect(self.update_auth_button_loading)
@@ -1275,24 +1491,56 @@ class LoginWindow(QDialog):
     def init_ui(self) -> None:
         self.setWindowTitle("Retail POS - Sign In")
         apply_app_icon(self)
-        self.setFixedSize(1040, 720) # Tăng nhẹ chiều cao cửa sổ lên 720 để bố cục thông thoáng
+        self.setFixedSize(1040, 720)
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(44, 44, 44, 44)
 
         tablet = QFrame(self)
         tablet.setObjectName("tabletFrame")
-        tablet_shadow = QGraphicsDropShadowEffect(tablet)
-        tablet_shadow.setBlurRadius(44)
-        tablet_shadow.setOffset(0, 16)
-        tablet_shadow.setColor(QColor(15, 23, 42, 38))
-        tablet.setGraphicsEffect(tablet_shadow)
+        self.apply_shadow(tablet, blur=44, y_offset=16, alpha=38)
         root_layout.addWidget(tablet)
 
         tablet_layout = QVBoxLayout(tablet)
-        tablet_layout.setContentsMargins(82, 48, 62, 38) # Giảm lề trên một chút để đẩy giao diện lên trên
+        tablet_layout.setContentsMargins(82, 48, 62, 38)
         tablet_layout.setSpacing(18)
 
+        tablet_layout.addLayout(self.create_header())
+
+        content = QHBoxLayout()
+        content.setSpacing(34)
+        tablet_layout.addLayout(content, 1)
+
+        content.addWidget(self.create_auth_card(), 0, Qt.AlignmentFlag.AlignVCenter)
+        content.addWidget(PosIllustration(), 1, Qt.AlignmentFlag.AlignBottom)
+
+        self.apply_styles()
+
+    def create_auth_card(self) -> QFrame:
+        login_card = QFrame()
+        login_card.setObjectName("loginCard")
+        login_card.setFixedSize(380, 580)
+        self.apply_shadow(login_card, blur=34, y_offset=16, alpha=32)
+
+        card_layout = QVBoxLayout(login_card)
+        card_layout.setContentsMargins(0, 0, 0, 0)
+        card_layout.setSpacing(0)
+
+        self.auth_stack = QStackedWidget()
+        self.auth_stack.setObjectName("authStack")
+        self.auth_stack.addWidget(self.create_login_view())
+        self.auth_stack.addWidget(self.create_register_view())
+        card_layout.addWidget(self.auth_stack, 1)
+        return login_card
+
+    def apply_shadow(self, widget: QWidget, blur: int, y_offset: int, alpha: int) -> None:
+        shadow = QGraphicsDropShadowEffect(widget)
+        shadow.setBlurRadius(blur)
+        shadow.setOffset(0, y_offset)
+        shadow.setColor(QColor(15, 23, 42, alpha))
+        widget.setGraphicsEffect(shadow)
+
+    def create_header(self) -> QHBoxLayout:
         heading = QHBoxLayout()
         heading.setSpacing(14)
 
@@ -1319,47 +1567,7 @@ class LoginWindow(QDialog):
         heading.addWidget(logo_label)
         heading.addLayout(heading_text)
         heading.addStretch(1)
-        
-        # Theme toggle button
-        self.theme_toggle = QPushButton()
-        self.theme_toggle.setObjectName("themeToggleButton")
-        self.theme_toggle.setFixedSize(36, 36)
-        self.theme_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.theme_toggle.setToolTip("Toggle dark/light mode")
-        
-        self.update_theme_toggle_icon()
-        self.theme_toggle.clicked.connect(self.toggle_theme)
-        heading.addWidget(self.theme_toggle, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-        
-        tablet_layout.addLayout(heading)
-
-        content = QHBoxLayout()
-        content.setSpacing(34)
-        tablet_layout.addLayout(content, 1)
-
-        login_card = QFrame()
-        login_card.setObjectName("loginCard")
-        login_card.setFixedSize(380, 580) # SỬA: Tăng chiều cao login_card từ 540 lên 580
-        card_shadow = QGraphicsDropShadowEffect(login_card)
-        card_shadow.setBlurRadius(34)
-        card_shadow.setOffset(0, 16)
-        card_shadow.setColor(QColor(15, 23, 42, 32))
-        login_card.setGraphicsEffect(card_shadow)
-
-        card_layout = QVBoxLayout(login_card)
-        card_layout.setContentsMargins(0, 0, 0, 0)
-        card_layout.setSpacing(0)
-
-        self.auth_stack = QStackedWidget()
-        self.auth_stack.setObjectName("authStack")
-        self.auth_stack.addWidget(self.create_login_view())
-        self.auth_stack.addWidget(self.create_register_view())
-        card_layout.addWidget(self.auth_stack, 1)
-
-        content.addWidget(login_card, 0, Qt.AlignmentFlag.AlignVCenter)
-        content.addWidget(PosIllustration(), 1, Qt.AlignmentFlag.AlignBottom)
-
-        self.apply_styles()
+        return heading
 
     def create_login_view(self) -> QWidget:
         page = QWidget()
@@ -1434,68 +1642,82 @@ class LoginWindow(QDialog):
         page = QWidget()
         layout = QVBoxLayout(page)
         # SỬA: Tối ưu lề trên và dưới xuống 24 để tạo thêm không gian thở theo chiều dọc
-        layout.setContentsMargins(34, 24, 34, 24)
-        layout.setSpacing(7)
+        layout.setContentsMargins(34, 16, 34, 16)
+        layout.setSpacing(5)
 
         register_title = IconManager.label("Register Store", "store", "loginTitle", icon_size=22)
         register_hint = QLabel("Create the first store owner account for a new store.")
         register_hint.setObjectName("authHint")
         register_hint.setWordWrap(True)
-        register_hint.setMaximumHeight(30)
+        register_hint.setMaximumHeight(24)
         layout.addWidget(register_title)
         layout.addWidget(register_hint)
         layout.addSpacing(2)
 
+        self.register_error_label = QLabel("")
+        self.register_error_label.setObjectName("errorLabel")
+        self.register_error_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        self.register_error_label.setWordWrap(True)
+        self.register_error_label.setMinimumHeight(0)
+        self.register_error_label.setMaximumHeight(48)
+        self.register_error_label.setVisible(False)
+        layout.addWidget(self.register_error_label)
+
         self.register_store_input = QLineEdit()
         self.register_store_input.setObjectName("cardInput")
         self.register_store_input.setPlaceholderText("Store name")
-        layout.addWidget(self.create_auth_input_row("store", self.register_store_input, row_height=42))
+        layout.addWidget(self.create_auth_input_row("store", self.register_store_input, row_height=38))
 
         self.register_full_name_input = QLineEdit()
         self.register_full_name_input.setObjectName("cardInput")
         self.register_full_name_input.setPlaceholderText("Owner full name")
-        layout.addWidget(self.create_auth_input_row("user", self.register_full_name_input, row_height=42))
+        layout.addWidget(self.create_auth_input_row("user", self.register_full_name_input, row_height=38))
 
         self.register_email_input = QLineEdit()
         self.register_email_input.setObjectName("cardInput")
         self.register_email_input.setPlaceholderText("Email")
-        layout.addWidget(self.create_auth_input_row("login", self.register_email_input, row_height=42))
+        layout.addWidget(self.create_auth_input_row("login", self.register_email_input, row_height=38))
 
         self.register_password_input = QLineEdit()
         self.register_password_input.setObjectName("cardInput")
         self.register_password_input.setPlaceholderText("Password")
         self.register_password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        layout.addWidget(self.create_auth_input_row("lock", self.register_password_input, row_height=42))
+        layout.addWidget(self.create_auth_input_row("lock", self.register_password_input, row_height=38))
 
         self.register_confirm_input = QLineEdit()
         self.register_confirm_input.setObjectName("cardInput")
         self.register_confirm_input.setPlaceholderText("Confirm password")
         self.register_confirm_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.register_confirm_input.returnPressed.connect(self.handle_register)
-        layout.addWidget(self.create_auth_input_row("confirm", self.register_confirm_input, row_height=42))
+        layout.addWidget(self.create_auth_input_row("confirm", self.register_confirm_input, row_height=38))
 
         self.register_submit_button = QPushButton("Register")
         IconManager.apply_button(self.register_submit_button, "add", IconManager.LIGHT)
         self.register_submit_button.setObjectName("loginButton")
-        self.register_submit_button.setFixedHeight(42)
+        self.register_submit_button.setFixedHeight(38)
         self.register_submit_button.clicked.connect(self.handle_register)
-        layout.addSpacing(4)
+        layout.addSpacing(2)
         layout.addWidget(self.register_submit_button)
 
         self.back_to_login_button = QPushButton("Back to login")
         IconManager.apply_button(self.back_to_login_button, "sidebar_collapse", IconManager.DARK)
         self.back_to_login_button.setObjectName("registerButton")
-        self.back_to_login_button.setFixedHeight(38)
+        self.back_to_login_button.setFixedHeight(34)
         self.back_to_login_button.clicked.connect(lambda: self.set_auth_mode("login"))
         layout.addWidget(self.back_to_login_button)
 
-        self.register_error_label = QLabel("")
-        self.register_error_label.setObjectName("errorLabel")
-        self.register_error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.register_error_label.setWordWrap(True)
-        self.register_error_label.setMinimumHeight(24)
-        layout.addWidget(self.register_error_label)
         layout.addStretch(1)
+
+        self.register_inputs = {
+            "store_name": self.register_store_input,
+            "full_name": self.register_full_name_input,
+            "email": self.register_email_input,
+            "password": self.register_password_input,
+            "confirm_password": self.register_confirm_input,
+        }
+        for input_field in self.register_inputs.values():
+            input_field.textChanged.connect(self.clear_register_validation_feedback)
+
         return page
 
     def create_inline_icon_label(self, icon_key: str) -> QLabel:
@@ -1517,6 +1739,7 @@ class LoginWindow(QDialog):
         row.setObjectName("inputRow")
         row.setFixedHeight(row_height)
         row.setProperty("focused", False)
+        row.setProperty("invalid", False)
         layout = QHBoxLayout(row)
         layout.setContentsMargins(14, 0, 12 if trailing_widget is not None else 14, 0)
         layout.setSpacing(10)
@@ -1546,27 +1769,76 @@ class LoginWindow(QDialog):
             QEvent.Type.FocusOut,
         }:
             input_row.setProperty("focused", event.type() == QEvent.Type.FocusIn)
-            input_row.style().unpolish(input_row)
-            input_row.style().polish(input_row)
-            input_row.update()
+            self.refresh_widget_style(input_row)
         return super().eventFilter(watched, event)
+
+    def refresh_widget_style(self, widget: QWidget) -> None:
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        widget.update()
 
     def set_auth_mode(self, mode: str) -> None:
         if mode == "register":
             self.set_feedback(self.error_label, "")
+            self.clear_register_validation_feedback()
             self.auth_stack.setCurrentIndex(1)
             self.register_store_input.setFocus()
             return
 
-        self.set_feedback(self.register_error_label, "")
+        self.clear_register_validation_feedback()
         self.auth_stack.setCurrentIndex(0)
         self.username_input.setFocus()
 
     def set_feedback(self, label: QLabel, message: str, state: str = "error") -> None:
-        label.setProperty("feedback", state)
+        label.setProperty("feedback", state if message else "empty")
         label.setText(message)
-        label.style().unpolish(label)
-        label.style().polish(label)
+        label.setVisible(bool(message))
+        self.refresh_widget_style(label)
+
+    def set_register_input_invalid(
+        self,
+        input_field: QLineEdit,
+        invalid: bool,
+        message: str = "",
+    ) -> None:
+        input_row = getattr(input_field, "_input_row", None)
+        if input_row is not None:
+            input_row.setProperty("invalid", invalid)
+            input_row.setToolTip(message if invalid else "")
+            self.refresh_widget_style(input_row)
+        input_field.setToolTip(message if invalid else "")
+
+    def clear_register_field_states(self) -> None:
+        for input_field in self.register_inputs.values():
+            self.set_register_input_invalid(input_field, False)
+
+    def clear_register_validation_feedback(self, *_args) -> None:
+        self.clear_register_field_states()
+        if getattr(self, "register_error_label", None) is not None:
+            self.set_feedback(self.register_error_label, "")
+
+    def show_register_validation_feedback(self, issues: list[RegistrationIssue]) -> None:
+        self.clear_register_field_states()
+        for issue in issues:
+            for field in issue.fields:
+                input_field = self.register_inputs.get(field)
+                if input_field is not None:
+                    self.set_register_input_invalid(input_field, True, issue.message)
+
+        messages = []
+        for issue in issues:
+            if issue.message not in messages:
+                messages.append(issue.message)
+        if len(messages) > 3:
+            feedback = "Please complete all highlighted fields before registering."
+        else:
+            feedback = "Please fix the highlighted fields: " + "; ".join(messages)
+        self.set_feedback(self.register_error_label, feedback, "validation")
+
+        first_field = issues[0].fields[0] if issues and issues[0].fields else ""
+        first_input = self.register_inputs.get(first_field)
+        if first_input is not None:
+            first_input.setFocus()
 
     def set_login_busy(self, busy: bool) -> None:
         for widget in (
@@ -1638,107 +1910,134 @@ class LoginWindow(QDialog):
         log_audit(int(self.current_user["id"]), audit_action)
         self.accept()
 
+    def read_login_credentials(self) -> LoginCredentials:
+        return LoginCredentials(
+            email=self.username_input.text().strip(),
+            password=self.password_input.text(),
+        )
+
+    def validate_login_credentials(self, credentials: LoginCredentials) -> str | None:
+        if not credentials.email or not credentials.password:
+            return "Please enter email and password"
+        return None
+
+    def handle_login_success(self, user: dict[str, Any]) -> None:
+        self.current_user = user
+        self.set_login_busy(False)
+        self.complete_auth_success("LOGIN")
+
+    def handle_login_error(self, error: Exception) -> None:
+        self.set_feedback(self.error_label, friendly_error(error))
+        self.password_input.clear()
+        self.set_login_busy(False)
+
     def handle_login(self) -> None:
-        email = self.username_input.text().strip()
-        password = self.password_input.text()
-        
-        if not email or not password:
-            self.set_feedback(self.error_label, "Please enter email and password")
+        credentials = self.read_login_credentials()
+        validation_error = self.validate_login_credentials(credentials)
+        if validation_error is not None:
+            self.set_feedback(self.error_label, validation_error)
             return
 
         self.set_feedback(self.error_label, "")
         self.set_login_busy(True)
 
-        def on_success(user: dict[str, Any]) -> None:
-            self.current_user = user
-            self.set_login_busy(False)
-            self.complete_auth_success("LOGIN")
-
-        def on_error(error: Exception) -> None:
-            self.set_feedback(self.error_label, friendly_error(error))
-            self.password_input.clear()
-            self.set_login_busy(False)
-
         started = self.auth_task_runner.start(
-            lambda: login_with_supabase(email, password),
-            on_success=on_success,
-            on_error=on_error,
+            lambda: login_with_supabase(credentials.email, credentials.password),
+            on_success=self.handle_login_success,
+            on_error=self.handle_login_error,
         )
         if not started:
             self.set_feedback(self.error_label, "Authentication is already running.")
             self.set_login_busy(False)
 
-    def toggle_theme(self) -> None:
-        """Toggle between dark and light theme modes."""
-        current_theme = get_theme_mode()
-        next_theme = THEME_LIGHT if current_theme == THEME_DARK else THEME_DARK
-        set_theme_mode(next_theme)
-        self.update_theme_toggle_icon()
-        self.apply_styles()
+    def read_store_registration_form(self) -> StoreRegistrationForm:
+        return StoreRegistrationForm(
+            store_name=self.register_store_input.text().strip(),
+            full_name=self.register_full_name_input.text().strip(),
+            email=self.register_email_input.text().strip(),
+            password=self.register_password_input.text(),
+            confirm_password=self.register_confirm_input.text(),
+        )
 
-    def update_theme_toggle_icon(self) -> None:
-        """Update theme toggle button icon based on current theme."""
-        current_theme = get_theme_mode()
-        icon_name = "sun" if current_theme == THEME_DARK else "moon"
-        IconManager.apply_button(self.theme_toggle, icon_name, size=20)
+    def validate_store_registration_form(self, form: StoreRegistrationForm) -> list[RegistrationIssue]:
+        issues: list[RegistrationIssue] = []
+        if not form.store_name:
+            issues.append(RegistrationIssue(("store_name",), "Store name is required."))
+        if not form.full_name:
+            issues.append(RegistrationIssue(("full_name",), "Owner full name is required."))
+        if not form.email:
+            issues.append(RegistrationIssue(("email",), "Email is required."))
+        elif not is_valid_email_address(form.email):
+            issues.append(RegistrationIssue(("email",), "Enter a valid email address."))
+        if not form.password:
+            issues.append(RegistrationIssue(("password",), "Password is required."))
+        elif len(form.password) < 6:
+            issues.append(RegistrationIssue(("password",), "Password must be at least 6 characters."))
+        if not form.confirm_password:
+            issues.append(RegistrationIssue(("confirm_password",), "Confirm your password."))
+        elif form.password and form.password != form.confirm_password:
+            issues.append(
+                RegistrationIssue(
+                    ("password", "confirm_password"),
+                    "Passwords do not match.",
+                )
+            )
+        return issues
+
+    def reset_register_form_after_success(self, email: str) -> None:
+        self.current_user = None
+        self.register_store_input.clear()
+        self.register_full_name_input.clear()
+        self.register_email_input.clear()
+        self.register_password_input.clear()
+        self.register_confirm_input.clear()
+        self.username_input.setText(email)
+        self.password_input.clear()
+        self.set_auth_mode("login")
+        self.set_feedback(
+            self.error_label,
+            "Store registered. Please log in with the new account.",
+            "success",
+        )
+
+    def handle_register_success(self, registered_user: dict[str, Any], email: str) -> None:
+        try:
+            log_audit(int(registered_user["id"]), "REGISTER_STORE")
+        except Exception:
+            pass
+        clear_session(sign_out_cloud=True)
+        self.set_register_busy(False)
+        self.reset_register_form_after_success(email)
+        QMessageBox.information(
+            self,
+            "Registration Complete",
+            "Store registration is complete. Please log in with the new account.",
+        )
+
+    def handle_register_error(self, error: Exception) -> None:
+        self.clear_register_field_states()
+        self.register_password_input.clear()
+        self.register_confirm_input.clear()
+        self.set_feedback(self.register_error_label, friendly_error(error))
+        self.set_register_busy(False)
 
     def handle_register(self) -> None:
-        store_name = self.register_store_input.text().strip()
-        full_name = self.register_full_name_input.text().strip()
-        email = self.register_email_input.text().strip()
-        password = self.register_password_input.text()
-        confirm_password = self.register_confirm_input.text()
-
-        if not store_name or not full_name or not email or not password:
-            self.set_feedback(self.register_error_label, "Please fill all fields.")
-            return
-        if password != confirm_password:
-            self.set_feedback(self.register_error_label, "Passwords do not match.")
-            return
-        if len(password) < 6:
-            self.set_feedback(self.register_error_label, "Password must be at least 6 characters.")
+        form = self.read_store_registration_form()
+        validation_issues = self.validate_store_registration_form(form)
+        if validation_issues:
+            self.show_register_validation_feedback(validation_issues)
             return
 
-        self.register_error_label.clear()
+        self.clear_register_validation_feedback()
         self.set_register_busy(True)
 
-        def on_success(registered_user: dict[str, Any]) -> None:
-            try:
-                log_audit(int(registered_user["id"]), "REGISTER_STORE")
-            except Exception:
-                pass
-            clear_session(sign_out_cloud=True)
-            self.current_user = None
-            self.set_register_busy(False)
-            self.register_store_input.clear()
-            self.register_full_name_input.clear()
-            self.register_email_input.clear()
-            self.register_password_input.clear()
-            self.register_confirm_input.clear()
-            self.username_input.setText(email)
-            self.password_input.clear()
-            self.set_auth_mode("login")
-            self.set_feedback(
-                self.error_label,
-                "Store registered. Please log in with the new account.",
-                "success",
-            )
-            QMessageBox.information(
-                self,
-                "Registration Complete",
-                "Store registration is complete. Please log in with the new account.",
-            )
-
-        def on_error(error: Exception) -> None:
-            self.set_feedback(self.register_error_label, friendly_error(error))
-            self.register_password_input.clear()
-            self.register_confirm_input.clear()
-            self.set_register_busy(False)
-
         started = self.auth_task_runner.start(
-            lambda: register_store_owner(store_name, full_name, email, password),
-            on_success=on_success,
-            on_error=on_error,
+            lambda: register_store_owner(form.store_name, form.full_name, form.email, form.password),
+            on_success=lambda registered_user: self.handle_register_success(
+                registered_user,
+                form.email,
+            ),
+            on_error=self.handle_register_error,
         )
         if not started:
             self.set_feedback(self.register_error_label, "Authentication is already running.")
@@ -1759,344 +2058,7 @@ class LoginWindow(QDialog):
         return self.current_user
 
     def apply_styles(self) -> None:
-        mode = get_theme_mode()
-        if mode == THEME_DARK:
-            styles = """
-            QDialog {
-                background: #0F172A;
-            }
-
-            QLabel {
-                background: transparent;
-            }
-
-            #tabletFrame {
-                background: #111827;
-                border: 34px solid #0F172A;
-                border-radius: 42px;
-            }
-
-            #appTitle {
-                color: #E5E7EB;
-                font-size: 30px;
-                font-weight: 900;
-            }
-
-            #appSubtitle {
-                color: #CBD5E1;
-                font-size: 16px;
-                font-weight: 700;
-            }
-
-            #creatorCredit {
-                color: #94A3B8;
-                font-size: 11px;
-                font-weight: 600;
-            }
-
-            #loginCard {
-                background: #111827;
-                border-radius: 12px;
-                border: 1px solid #334155;
-            }
-
-            #authStack {
-                background: transparent;
-            }
-
-            #loginTitle {
-                color: #E5E7EB;
-                font-size: 28px;
-                font-weight: 900;
-            }
-
-            #authHint {
-                color: #94A3B8;
-                font-size: 12px;
-                font-weight: 650;
-            }
-
-            #inputRow {
-                background: #1E293B;
-                border: 1px solid #334155;
-                border-radius: 7px;
-            }
-
-            #inputRow[focused="true"] {
-                background: #1E293B;
-                border: 2px solid #3B82F6;
-                border-radius: 7px;
-            }
-
-            #iconSeparator {
-                background: #334155;
-                border: none;
-                min-height: 22px;
-                max-height: 22px;
-            }
-
-            #cardInput {
-                background: transparent;
-                border: none;
-                color: #E5E7EB;
-                font-size: 14px;
-                padding: 0;
-                min-height: 34px;
-            }
-
-            #inputRow #cardInput,
-            #inputRow[focused="true"] #cardInput {
-                background: transparent;
-                border: none;
-                color: #E5E7EB;
-            }
-
-            #passwordToggleButton {
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 24px;
-                max-height: 24px;
-                padding: 0;
-            }
-
-            #passwordToggleButton:hover {
-                background: #1E293B;
-            }
-
-            #rememberLabel {
-                color: #E5E7EB;
-                font-size: 13px;
-                font-weight: 700;
-            }
-
-            #loginButton {
-                background: #1F77FF;
-                border: none;
-                border-radius: 8px;
-                color: #FFFFFF;
-                font-size: 18px;
-                font-weight: 800;
-            }
-
-            #loginButton:hover {
-                background: #1768E8;
-            }
-
-            #loginButton:pressed {
-                background: #1157C7;
-            }
-
-            #registerButton {
-                background: #1E3A5F;
-                border: 1px solid #3B5998;
-                border-radius: 8px;
-                color: #60A5FA;
-                font-size: 14px;
-                font-weight: 800;
-            }
-
-            #registerButton:hover {
-                background: #1F4A6B;
-            }
-
-            #errorLabel {
-                color: #EF5350;
-                font-size: 12px;
-                font-weight: 700;
-                line-height: 16px;
-            }
-
-            #errorLabel[feedback="success"] {
-                color: #66BB6A;
-            }
-
-            #themeToggleButton {
-                background: transparent;
-                border: 1px solid #334155;
-                border-radius: 8px;
-                color: #CBD5E1;
-            }
-
-            #themeToggleButton:hover {
-                background: #1E293B;
-                border-color: #475569;
-            }
-
-            #themeToggleButton:pressed {
-                background: #0F172A;
-            }
-            """
-        else:
-            styles = """
-            QDialog {
-                background: #DDE1E6;
-            }
-
-            QLabel {
-                background: transparent;
-            }
-
-            #tabletFrame {
-                background: #FFFFFF;
-                border: 34px solid #F7F7F7;
-                border-radius: 42px;
-            }
-
-            #appTitle {
-                color: #050505;
-                font-size: 30px;
-                font-weight: 900;
-            }
-
-            #appSubtitle {
-                color: #0F1115;
-                font-size: 16px;
-                font-weight: 700;
-            }
-
-            #creatorCredit {
-                color: #64748B;
-                font-size: 11px;
-                font-weight: 600;
-            }
-
-            #loginCard {
-                background: #FFFFFF;
-                border-radius: 12px;
-            }
-
-            #authStack {
-                background: transparent;
-            }
-
-            #loginTitle {
-                color: #050505;
-                font-size: 28px;
-                font-weight: 900;
-            }
-
-            #authHint {
-                color: #64748B;
-                font-size: 12px;
-                font-weight: 650;
-            }
-
-            #inputRow {
-                background: #F8FAFC;
-                border: 1px solid #E1E6EE;
-                border-radius: 7px;
-            }
-
-            #inputRow[focused="true"] {
-                background: #FFFFFF;
-                border: 2px solid #3B82F6;
-                border-radius: 7px;
-            }
-
-            #iconSeparator {
-                background: #EEF1F5;
-                border: none;
-                min-height: 22px;
-                max-height: 22px;
-            }
-
-            #cardInput {
-                background: transparent;
-                border: none;
-                color: #111111;
-                font-size: 14px;
-                padding: 0;
-                min-height: 34px;
-            }
-
-            #inputRow #cardInput,
-            #inputRow[focused="true"] #cardInput {
-                background: transparent;
-                border: none;
-            }
-
-            #passwordToggleButton {
-                background: transparent;
-                border: none;
-                border-radius: 6px;
-                min-width: 20px;
-                max-width: 20px;
-                min-height: 24px;
-                max-height: 24px;
-                padding: 0;
-            }
-
-            #passwordToggleButton:hover {
-                background: #F2F7FF;
-            }
-
-            #rememberLabel {
-                color: #1F2933;
-                font-size: 13px;
-                font-weight: 700;
-            }
-
-            #loginButton {
-                background: #1F77FF;
-                border: none;
-                border-radius: 8px;
-                color: #FFFFFF;
-                font-size: 18px;
-                font-weight: 800;
-            }
-
-            #loginButton:hover {
-                background: #1768E8;
-            }
-
-            #loginButton:pressed {
-                background: #1157C7;
-            }
-
-            #registerButton {
-                background: #EEF5FF;
-                border: 1px solid #CFE1FF;
-                border-radius: 8px;
-                color: #1D4ED8;
-                font-size: 14px;
-                font-weight: 800;
-            }
-
-            #registerButton:hover {
-                background: #E1EEFF;
-            }
-
-            #errorLabel {
-                color: #DC2626;
-                font-size: 12px;
-                font-weight: 700;
-                line-height: 16px;
-            }
-
-            #errorLabel[feedback="success"] {
-                color: #059669;
-            }
-
-            #themeToggleButton {
-                background: #F3F7FD;
-                border: 1px solid #D8E0E8;
-                border-radius: 8px;
-                color: #334155;
-            }
-
-            #themeToggleButton:hover {
-                background: #EEF2F8;
-                border-color: #CBD5E1;
-            }
-
-            #themeToggleButton:pressed {
-                background: #E8ECEF;
-            }
-            """
-        self.setStyleSheet(styles + build_modern_widget_stylesheet())
+        self.setStyleSheet(build_login_stylesheet() + build_modern_widget_stylesheet(THEME_LIGHT))
 
 
 def show_login() -> dict[str, Any] | None:

@@ -52,9 +52,9 @@ def _polish_user_action_button(button, kind="neutral"):
     palette = {
         "edit": ("#2563eb", "#eff6ff", "#bfdbfe", "#dbeafe"),
         "active": ("#ffffff", "#0f766e", "#0f766e", "#115e59"),
-        "inactive": ("#475569", "#f8fafc", "#cbd5e1", "#f1f5f9"),
+        "inactive": ("#46586A", "#f8fafc", "#cbd5e1", "#f1f5f9"),
         "delete": ("#e11d48", "#fff1f2", "#fecdd3", "#ffe4e6"),
-        "neutral": ("#334155", "#f8fafc", "#cbd5e1", "#f1f5f9"),
+        "neutral": ("#314154", "#f8fafc", "#cbd5e1", "#f1f5f9"),
     }
     color, bg, border, hover = palette.get(kind, palette["neutral"])
     selector = f"#{button.objectName()}" if button.objectName() else button.metaObject().className()
@@ -268,15 +268,15 @@ class UserEditDialog(QDialog):
         if mode == THEME_DARK:
             styles = """
             QDialog {
-                background: #0F172A;
+                background: #101820;
             }
             #dialogTitle {
-                color: #F3F4F6;
+                color: #F5F8FA;
                 font-size: 20px;
                 font-weight: 800;
             }
             #formLabel, #dialogFeedback {
-                color: #D1D5DB;
+                color: #C8D3DF;
                 font-size: 12px;
                 font-weight: 700;
             }
@@ -284,7 +284,7 @@ class UserEditDialog(QDialog):
                 color: #EF4444;
             }
             #changePasswordCheck {
-                color: #E5E7EB;
+                color: #E6EDF3;
                 font-size: 13px;
                 font-weight: 800;
                 spacing: 8px;
@@ -294,11 +294,11 @@ class UserEditDialog(QDialog):
                 height: 16px;
             }
             QLineEdit, QComboBox {
-                background: #1E293B;
-                border: 1px solid #334155;
+                background: #1F2A37;
+                border: 1px solid #314154;
                 border-radius: 8px;
                 padding: 9px 11px;
-                color: #E5E7EB;
+                color: #E6EDF3;
             }
             QPushButton {
                 border: none;
@@ -308,15 +308,15 @@ class UserEditDialog(QDialog):
                 padding: 10px 14px;
             }
             #primaryButton {
-                background: #3B82F6;
+                background: #60A5FA;
             }
             #neutralButton {
-                background: #475569;
-                color: #E5E7EB;
+                background: #46586A;
+                color: #E6EDF3;
             }
             QPushButton:disabled {
-                background: #475569;
-                color: #9CA3AF;
+                background: #46586A;
+                color: #A7B3C2;
             }
             """
         else:
@@ -368,8 +368,8 @@ class UserEditDialog(QDialog):
                 color: #17212B;
             }
             QPushButton:disabled {
-                background: #CBD5E1;
-                color: #64748B;
+                background: #C8D3DF;
+                color: #708195;
             }
             """
         self.setStyleSheet(styles + build_modern_widget_stylesheet())
@@ -407,8 +407,8 @@ class StatusToggle(QPushButton):
         knob_x = width - knob_size - 5 if self.isChecked() else 5
         knob_y = 4
         track_color = QColor("#0F766E") if self.isChecked() else QColor("#E2E8F0")
-        track_border = QColor("#0D9488") if self.isChecked() else QColor("#CBD5E1")
-        symbol_color = QColor("#FFFFFF") if self.isChecked() else QColor("#64748B")
+        track_border = QColor("#0D9488") if self.isChecked() else QColor("#C8D3DF")
+        symbol_color = QColor("#FFFFFF") if self.isChecked() else QColor("#708195")
         knob_shadow = QColor(15, 23, 42, 28)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(track_color)
@@ -1001,7 +1001,7 @@ class UserManagementWindow(QWidget):
             }
             #editIconButton, #deleteIconButton {
                 background: #F8FAFC;
-                border: 1px solid #CBD5E1;
+                border: 1px solid #C8D3DF;
                 border-radius: 8px;
                 padding: 0;
             }
@@ -1021,8 +1021,8 @@ class UserManagementWindow(QWidget):
                 background: transparent;
             }
             QPushButton:disabled {
-                background: #CBD5E1;
-                color: #64748B;
+                background: #C8D3DF;
+                color: #708195;
             }
             QTableWidget {
                 background: #FFFFFF;
@@ -1031,13 +1031,13 @@ class UserManagementWindow(QWidget):
                 alternate-background-color: #F8FAFC;
                 gridline-color: transparent;
                 selection-background-color: #E0F2FE;
-                selection-color: #0F172A;
+                selection-color: #101820;
             }
             QHeaderView::section {
                 background: #F1F5F9;
                 border: none;
                 border-bottom: 1px solid #D9E3EE;
-                color: #1E293B;
+                color: #1F2A37;
                 font-weight: 800;
                 padding: 11px 10px;
             }

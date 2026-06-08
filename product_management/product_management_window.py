@@ -32,211 +32,301 @@ from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.loading import BlockingTaskRunner, PRODUCT_SYNC_TIMEOUT_MS
 from ui.notifications import friendly_error
-from ui.theme import build_modern_widget_stylesheet
+from ui.theme import THEME_DARK, build_modern_widget_stylesheet, get_theme_mode
 from ui.thumbnail_cache import ThumbnailCache
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_TABLE_PAGE_SIZE = 250
 
-PRODUCT_MANAGEMENT_STYLESHEET = """
-QWidget {
-    background: #EEF1F4;
-    color: #1F2933;
+def build_product_management_stylesheet(mode: str | None = None) -> str:
+    active = mode or get_theme_mode()
+    if active == THEME_DARK:
+        colors = {
+            "window_bg": "#101820",
+            "text": "#E6EDF3",
+            "dialog_bg": "#101820",
+            "title": "#F5F8FA",
+            "subtitle": "#C8D3DF",
+            "section": "#E6EDF3",
+            "helper_bg": "#203B5F",
+            "helper_border": "#274B7A",
+            "helper_text": "#BFDBFE",
+            "panel_bg": "#17212B",
+            "panel_border": "#314154",
+            "dialog_body_bg": "#17212B",
+            "image_bg": "#101820",
+            "image_border": "#314154",
+            "image_text": "#A7B3C2",
+            "barcode_row_bg": "#1F2A37",
+            "barcode_row_border": "#314154",
+            "barcode_value": "#E6EDF3",
+            "barcode_variant_bg": "#274B7A",
+            "barcode_variant_border": "#2563EB",
+            "barcode_variant_text": "#BFDBFE",
+            "empty_text": "#A7B3C2",
+            "input_bg": "#1F2A37",
+            "input_border": "#314154",
+            "input_focus": "#60A5FA",
+            "neutral_button": "#46586A",
+            "barcode_delete_bg": "#3F1D24",
+            "barcode_delete_text": "#FCA5A5",
+            "table_bg": "#17212B",
+            "table_alt": "#101820",
+            "table_border": "#314154",
+            "table_selection_bg": "#274B7A",
+            "table_selection_text": "#E6EDF3",
+            "table_header_bg": "#1F2A37",
+            "table_header_text": "#E6EDF3",
+            "table_item_border": "#1F2A37",
+        }
+    else:
+        colors = {
+            "window_bg": "#EEF1F4",
+            "text": "#1F2933",
+            "dialog_bg": "#EEF1F4",
+            "title": "#17212B",
+            "subtitle": "#64707D",
+            "section": "#25313D",
+            "helper_bg": "#F0F7FF",
+            "helper_border": "#CFE3FF",
+            "helper_text": "#32506D",
+            "panel_bg": "#FFFFFF",
+            "panel_border": "#D8E0E8",
+            "dialog_body_bg": "#FFFFFF",
+            "image_bg": "#F8FAFC",
+            "image_border": "#D8E0E8",
+            "image_text": "#64707D",
+            "barcode_row_bg": "#FFFFFF",
+            "barcode_row_border": "#E5EAF0",
+            "barcode_value": "#25313D",
+            "barcode_variant_bg": "#EAF4FE",
+            "barcode_variant_border": "#CFE3FF",
+            "barcode_variant_text": "#2563EB",
+            "empty_text": "#7B8794",
+            "input_bg": "#FFFFFF",
+            "input_border": "#C9D3DE",
+            "input_focus": "#2563EB",
+            "neutral_button": "#708195",
+            "barcode_delete_bg": "#FEE2E2",
+            "barcode_delete_text": "#B91C1C",
+            "table_bg": "#FFFFFF",
+            "table_alt": "#F7F9FB",
+            "table_border": "#D8E0E8",
+            "table_selection_bg": "#DBEAFE",
+            "table_selection_text": "#17212B",
+            "table_header_bg": "#F0F4F8",
+            "table_header_text": "#25313D",
+            "table_item_border": "#EDF1F5",
+        }
+
+    return f"""
+QWidget {{
+    background: {colors["window_bg"]};
+    color: {colors["text"]};
     font-family: "Segoe UI";
     font-size: 13px;
-}
+}}
 
-QDialog {
-    background: #EEF1F4;
-}
+QDialog {{
+    background: {colors["dialog_bg"]};
+}}
 
-#titleLabel {
-    color: #17212B;
+#titleLabel {{
+    color: {colors["title"]};
     font-size: 26px;
     font-weight: 700;
-}
+}}
 
-#dialogTitleLabel {
-    color: #17212B;
+#dialogTitleLabel {{
+    color: {colors["title"]};
     font-size: 22px;
     font-weight: 700;
-}
+}}
 
-#subtitleLabel {
-    color: #64707D;
+#subtitleLabel {{
+    color: {colors["subtitle"]};
     font-size: 13px;
-}
+}}
 
-#sectionLabel {
-    color: #25313D;
+#sectionLabel {{
+    color: {colors["section"]};
     font-size: 15px;
     font-weight: 700;
-}
+}}
 
-#fieldSectionLabel {
-    color: #25313D;
+#fieldSectionLabel {{
+    color: {colors["section"]};
     font-size: 13px;
     font-weight: 700;
-}
+}}
 
-#barcodeRules {
-    background: #F0F7FF;
-    border: 1px solid #CFE3FF;
+#barcodeRules {{
+    background: {colors["helper_bg"]};
+    border: 1px solid {colors["helper_border"]};
     border-radius: 8px;
-    color: #32506D;
+    color: {colors["helper_text"]};
     font-size: 11px;
     font-weight: 600;
     padding: 8px 10px;
-}
+}}
 
-#panel, #dialogPanel {
-    background: #FFFFFF;
-    border: 1px solid #D8E0E8;
+#panel, #dialogPanel {{
+    background: {colors["panel_bg"]};
+    border: 1px solid {colors["panel_border"]};
     border-radius: 10px;
-}
+}}
 
-#dialogScroll, #dialogBody {
-    background: #FFFFFF;
+#dialogScroll, #dialogBody {{
+    background: {colors["dialog_body_bg"]};
     border: none;
-}
+}}
 
-QLabel {
+QLabel {{
     background: transparent;
-}
+}}
 
-#imagePreview, #tableImage {
-    background: #F8FAFC;
-    border: 1px solid #D8E0E8;
+#imagePreview, #tableImage {{
+    background: {colors["image_bg"]};
+    border: 1px solid {colors["image_border"]};
     border-radius: 8px;
-    color: #64707D;
+    color: {colors["image_text"]};
     font-size: 12px;
     font-weight: 700;
-}
+}}
 
-#barcodeScroll {
-    background: #F8FAFC;
-    border: 1px solid #D8E0E8;
+#barcodeScroll {{
+    background: {colors["image_bg"]};
+    border: 1px solid {colors["image_border"]};
     border-radius: 8px;
-}
+}}
 
-#barcodeRow {
-    background: #FFFFFF;
-    border: 1px solid #E5EAF0;
+#barcodeRow {{
+    background: {colors["barcode_row_bg"]};
+    border: 1px solid {colors["barcode_row_border"]};
     border-radius: 7px;
-}
+}}
 
-#barcodeValue {
-    color: #25313D;
+#barcodeValue {{
+    color: {colors["barcode_value"]};
     font-weight: 700;
-}
+}}
 
-#barcodeVariant {
-    background: #EAF4FE;
-    border: 1px solid #CFE3FF;
+#barcodeVariant {{
+    background: {colors["barcode_variant_bg"]};
+    border: 1px solid {colors["barcode_variant_border"]};
     border-radius: 6px;
-    color: #2563EB;
+    color: {colors["barcode_variant_text"]};
     font-size: 11px;
     font-weight: 800;
     padding: 3px 7px;
-}
+}}
 
-#emptyBarcodeLabel {
-    color: #7B8794;
+#emptyBarcodeLabel {{
+    color: {colors["empty_text"]};
     padding: 20px;
-}
+}}
 
-QLineEdit {
-    background: #FFFFFF;
-    border: 1px solid #C9D3DE;
+QLineEdit {{
+    background: {colors["input_bg"]};
+    border: 1px solid {colors["input_border"]};
     border-radius: 8px;
+    color: {colors["text"]};
     padding: 10px 12px;
     min-height: 20px;
     selection-background-color: #2563EB;
     selection-color: #FFFFFF;
-}
+}}
 
-QLineEdit:focus {
-    border: 1px solid #2563EB;
-}
+QLineEdit:focus {{
+    border: 1px solid {colors["input_focus"]};
+}}
 
-QCheckBox {
+QCheckBox {{
     background: transparent;
+    color: {colors["text"]};
     spacing: 8px;
     font-weight: 600;
-}
+}}
 
-QPushButton {
+QPushButton {{
     border: none;
     border-radius: 8px;
     color: #FFFFFF;
     font-weight: 700;
     min-height: 42px;
     padding: 0 14px;
-}
+}}
 
-#primaryButton, #rowEditButton {
+#primaryButton, #rowEditButton {{
     background: #2563EB;
-}
+}}
 
-#secondaryButton {
+#secondaryButton {{
     background: #0F766E;
-}
+}}
 
-#dangerButton, #rowDeleteButton {
+#dangerButton, #rowDeleteButton {{
     background: #DC2626;
-}
+}}
 
-#neutralButton {
-    background: #64748B;
-}
+#neutralButton {{
+    background: {colors["neutral_button"]};
+}}
 
-#smallButton {
+#smallButton {{
     background: #2563EB;
     min-width: 104px;
     padding: 0 12px;
-}
+}}
 
-#barcodeDeleteButton {
-    background: #FEE2E2;
-    color: #B91C1C;
+#barcodeDeleteButton {{
+    background: {colors["barcode_delete_bg"]};
+    color: {colors["barcode_delete_text"]};
     border-radius: 6px;
     padding: 0;
-}
+}}
 
-#rowEditButton, #rowDeleteButton {
+#rowEditButton, #rowDeleteButton {{
     min-height: 32px;
     padding: 0 10px;
-}
+}}
 
-QPushButton:pressed {
+QPushButton:pressed {{
     padding-top: 13px;
     padding-bottom: 11px;
-}
+}}
 
-QTableView {
-    background: #FFFFFF;
-    border: 1px solid #D8E0E8;
+QTableView {{
+    background: {colors["table_bg"]};
+    border: 1px solid {colors["table_border"]};
     border-radius: 8px;
-    alternate-background-color: #F7F9FB;
+    alternate-background-color: {colors["table_alt"]};
     gridline-color: transparent;
-    selection-background-color: #DBEAFE;
-    selection-color: #17212B;
-}
+    color: {colors["text"]};
+    selection-background-color: {colors["table_selection_bg"]};
+    selection-color: {colors["table_selection_text"]};
+}}
 
-QHeaderView::section {
-    background: #F0F4F8;
+QHeaderView::section {{
+    background: {colors["table_header_bg"]};
     border: none;
-    border-bottom: 1px solid #D8E0E8;
-    color: #25313D;
+    border-bottom: 1px solid {colors["table_border"]};
+    color: {colors["table_header_text"]};
     font-weight: 700;
     padding: 10px;
-}
+}}
 
-QTableView::item {
-    border-bottom: 1px solid #EDF1F5;
+QTableView::item {{
+    border-bottom: 1px solid {colors["table_item_border"]};
+    color: {colors["text"]};
     padding: 8px;
-}
-""" + build_modern_widget_stylesheet()
+}}
+
+QTableView::item:selected {{
+    background: {colors["table_selection_bg"]};
+    color: {colors["table_selection_text"]};
+}}
+""" + build_modern_widget_stylesheet(active)
 
 def format_barcodes_for_display(barcodes: list[str]) -> str:
     if not barcodes:
@@ -404,7 +494,7 @@ class ProductActionsDelegate(QStyledItemDelegate):
         edit_rect, retry_rect, delete_rect = self.action_rects(option.rect)
         sync_status, sync_error = model.product_sync_status_at(index.row())
         self.draw_action_button(painter, edit_rect, "Edit", "#2563EB")
-        retry_color = "#F59E0B" if sync_status == "pending" or sync_error else "#94A3B8"
+        retry_color = "#F59E0B" if sync_status == "pending" or sync_error else "#A7B3C2"
         self.draw_action_button(painter, retry_rect, "Retry", retry_color)
         self.draw_action_button(painter, delete_rect, "Delete", "#DC2626")
 
@@ -468,12 +558,15 @@ class ProductDialog(QDialog):
         self.setModal(True)
         self.resize(620, 760)
         self.setMinimumSize(560, 620)
-        self.setStyleSheet(PRODUCT_MANAGEMENT_STYLESHEET)
+        self.apply_styles()
 
         self.create_ui()
         if product is not None:
             self.populate_form(product)
         self.render_barcode_list()
+
+    def apply_styles(self) -> None:
+        self.setStyleSheet(build_product_management_stylesheet())
 
     def create_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -1024,4 +1117,4 @@ class ProductManagementWindow(QWidget):
         super().showEvent(event)
 
     def apply_styles(self) -> None:
-        self.setStyleSheet(PRODUCT_MANAGEMENT_STYLESHEET)
+        self.setStyleSheet(build_product_management_stylesheet())

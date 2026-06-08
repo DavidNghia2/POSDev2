@@ -35,16 +35,16 @@ def _popup_colors(mode: str | None = None) -> dict[str, str]:
     active = mode or get_theme_mode()
     if active == THEME_DARK:
         return {
-            "bg": "#111827",
-            "border": "#334155",
-            "item_text": "#E5E7EB",
+            "bg": "#17212B",
+            "border": "#314154",
+            "item_text": "#E6EDF3",
             "hover_bg": "#2563EB",
             "hover_text": "#FFFFFF",
         }
     return {
         "bg": "#FFFFFF",
-        "border": "#CBD5E1",
-        "item_text": "#0F172A",
+        "border": "#C8D3DF",
+        "item_text": "#101820",
         "hover_bg": "#2563EB",
         "hover_text": "#FFFFFF",
     }
@@ -173,14 +173,14 @@ def build_modern_widget_stylesheet(mode: str | None = None) -> str:
     if active == THEME_DARK:
         return f"""
 QWidget {{
-    color: #E5E7EB;
+    color: #E6EDF3;
     font-family: "Segoe UI";
     font-size: 13px;
-    background: #0F172A;
+    background: #101820;
 }}
 
 QDialog, QFrame, QScrollArea, QListView, QAbstractItemView, QMenu, QMenuBar {{
-    background: #111827;
+    background: #17212B;
 }}
 
 QLabel {{
@@ -197,8 +197,8 @@ QFrame#qrPreviewCard {{
 }}
 
 QPushButton {{
-    background: #1F2937;
-    color: #E5E7EB;
+    background: #1F2A37;
+    color: #E6EDF3;
     border: none;
     border-radius: 8px;
     font-weight: 750;
@@ -208,28 +208,28 @@ QPushButton {{
 }}
 
 QPushButton:hover {{
-    background: #111827;
+    background: #17212B;
 }}
 
 QPushButton:pressed {{
     padding-top: 6px;
     padding-bottom: 4px;
-    background: #0B1220;
+    background: #223041;
 }}
 
 QPushButton:disabled {{
-    background: #334155;
-    color: #94A3B8;
+    background: #314154;
+    color: #A7B3C2;
 }}
 
 QLineEdit,
 QComboBox,
 QDateEdit,
 QTextEdit {{
-    background: #111827;
-    border: 1px solid #334155;
+    background: #17212B;
+    border: 1px solid #314154;
     border-radius: 8px;
-    color: #E5E7EB;
+    color: #E6EDF3;
     min-height: 18px;
     padding: 7px 10px;
     selection-background-color: #2563EB;
@@ -240,7 +240,7 @@ QLineEdit:hover,
 QComboBox:hover,
 QDateEdit:hover,
 QTextEdit:hover {{
-    border-color: #475569;
+    border-color: #46586A;
 }}
 
 QLineEdit:focus,
@@ -264,8 +264,8 @@ QDateEdit::drop-down {{
 }}
 
 QComboBox QAbstractItemView {{
-    background: #111827;
-    border: 1px solid #334155;
+    background: #17212B;
+    border: 1px solid #314154;
     border-radius: 0;
     outline: 0;
     padding: 0;
@@ -275,8 +275,8 @@ QComboBox QAbstractItemView {{
 }}
 
 QComboBox QAbstractItemView::item {{
-    background: #111827;
-    color: #E5E7EB;
+    background: #17212B;
+    color: #E6EDF3;
     min-height: 28px;
     padding: 6px 10px;
 }}
@@ -289,14 +289,14 @@ QComboBox QAbstractItemView::item:selected {{
 
 QCheckBox {{
     background: transparent;
-    color: #E5E7EB;
+    color: #E6EDF3;
     font-weight: 650;
     spacing: 7px;
 }}
 
 QCheckBox::indicator {{
-    background: #111827;
-    border: 1px solid #64748B;
+    background: #17212B;
+    border: 1px solid #708195;
     border-radius: 5px;
     height: 17px;
     width: 17px;
@@ -313,36 +313,36 @@ QCheckBox::indicator:checked {{
 }}
 
 QRadioButton {{
-    background: #111827;
-    border: 1px solid #334155;
+    background: #17212B;
+    border: 1px solid #314154;
     border-radius: 10px;
-    color: #E5E7EB;
+    color: #E6EDF3;
     font-weight: 750;
     padding: 8px 11px;
     spacing: 7px;
 }}
 
 QRadioButton:hover {{
-    background: #0F172A;
-    border-color: #475569;
+    background: #101820;
+    border-color: #46586A;
 }}
 
 QRadioButton:checked {{
-    background: #0B1220;
+    background: #223041;
     border-color: #2563EB;
     color: #93C5FD;
 }}
 
 QRadioButton::indicator {{
-    background: #111827;
-    border: 1px solid #64748B;
+    background: #17212B;
+    border: 1px solid #708195;
     border-radius: 7px;
     height: 15px;
     width: 15px;
 }}
 
 QRadioButton::indicator:checked {{
-    background: #111827;
+    background: #17212B;
     border: 2px solid #2563EB;
     border-radius: 7px;
     image: url("{RADIO_DOT_ICON_URL}");
@@ -389,13 +389,13 @@ QRadioButton::indicator:checked {{
 
 #neutralButton,
 #neutralDialogButton {{
-    background: #334155;
-    color: #E5E7EB;
+    background: #314154;
+    color: #E6EDF3;
 }}
 
 #neutralButton:hover,
 #neutralDialogButton:hover {{
-    background: #475569;
+    background: #46586A;
 }}
 
 #primaryButton,
@@ -444,42 +444,42 @@ ActionButton {{
 }}
 
 QTableWidget {{
-    alternate-background-color: #0F172A;
-    background: #111827;
-    border: 1px solid #334155;
+    alternate-background-color: #101820;
+    background: #17212B;
+    border: 1px solid #314154;
     border-radius: 12px;
     gridline-color: transparent;
     outline: 0;
-    selection-background-color: #1E3A8A;
-    selection-color: #E5E7EB;
+    selection-background-color: #274B7A;
+    selection-color: #E6EDF3;
 }}
 
 QHeaderView::section {{
-    background: #0F172A;
+    background: #101820;
     border: none;
-    border-bottom: 1px solid #334155;
-    color: #CBD5E1;
+    border-bottom: 1px solid #314154;
+    color: #C8D3DF;
     font-weight: 800;
     padding: 11px 10px;
 }}
 
 QTableWidget::item {{
-    border-bottom: 1px solid #1E293B;
+    border-bottom: 1px solid #1F2A37;
     padding: 8px 10px;
 }}
 
 QTableWidget::item:selected {{
-    background: #1E3A8A;
-    color: #E5E7EB;
+    background: #274B7A;
+    color: #E6EDF3;
 }}
 
 QMessageBox {{
-    background: #0F172A;
+    background: #101820;
 }}
 
 QMessageBox QLabel {{
     background: transparent;
-    color: #E5E7EB;
+    color: #E6EDF3;
     font-size: 13px;
 }}
 
@@ -499,19 +499,19 @@ QMessageBox QPushButton:hover {{
 }}
 
 QScrollBar:vertical {{
-    background: #0F172A;
+    background: #101820;
     border: none;
     width: 12px;
 }}
 
 QScrollBar::handle:vertical {{
-    background: #475569;
+    background: #46586A;
     border-radius: 6px;
     min-height: 34px;
 }}
 
 QScrollBar::handle:vertical:hover {{
-    background: #64748B;
+    background: #708195;
 }}
 
 QScrollBar::add-line:vertical,
@@ -536,7 +536,7 @@ QScrollBar::sub-page:vertical {{
 #statTitle,
 #statValue,
 #noDataLabel {{
-    color: #CBD5E1;
+    color: #C8D3DF;
 }}
 
 #panel,
@@ -558,52 +558,52 @@ QScrollBar::sub-page:vertical {{
 #barcodeVariant,
 #emptyBarcodeLabel,
 #barcodeRules {{
-    background: #111827;
-    border: 1px solid #334155;
+    background: #17212B;
+    border: 1px solid #314154;
 }}
 
 QTableView,
 QTableWidget {{
-    background: #111827;
-    border: 1px solid #334155;
-    color: #E5E7EB;
+    background: #17212B;
+    border: 1px solid #314154;
+    color: #E6EDF3;
 }}
 
 QTableView::item,
 QTableWidget::item {{
-    background: #111827;
-    color: #E5E7EB;
+    background: #17212B;
+    color: #E6EDF3;
 }}
 
 QDateEdit,
 QComboBox,
 QLineEdit,
 QTextEdit {{
-    background: #111827;
-    border: 1px solid #334155;
-    color: #E5E7EB;
+    background: #17212B;
+    border: 1px solid #314154;
+    color: #E6EDF3;
 }}
 
 QComboBox QAbstractItemView::item {{
-    background: #111827;
-    color: #E5E7EB;
+    background: #17212B;
+    color: #E6EDF3;
 }}
 
 QHeaderView::section {{
-    background: #111827;
-    border-color: #334155;
-    color: #CBD5E1;
+    background: #17212B;
+    border-color: #314154;
+    color: #C8D3DF;
 }}
 
 QWidget#mainWindow,
 QWidget#dashboardPage,
 QWidget#pageContainer {{
-    background: #0F172A;
+    background: #101820;
 }}
 """
     return """
 QWidget {
-    color: #0F172A;
+    color: #101820;
     font-family: "Segoe UI";
     font-size: 13px;
 }
@@ -626,9 +626,9 @@ QComboBox,
 QDateEdit,
 QTextEdit {
     background: #FFFFFF;
-    border: 1px solid #CBD5E1;
+    border: 1px solid #C8D3DF;
     border-radius: 8px;
-    color: #0F172A;
+    color: #101820;
     min-height: 18px;
     padding: 7px 10px;
     selection-background-color: #2563EB;
@@ -639,7 +639,7 @@ QLineEdit:hover,
 QComboBox:hover,
 QDateEdit:hover,
 QTextEdit:hover {
-    border-color: #94A3B8;
+    border-color: #A7B3C2;
 }
 
 QLineEdit:focus,
@@ -664,7 +664,7 @@ QDateEdit::drop-down {
 
 QComboBox QAbstractItemView {
     background: #FFFFFF;
-    border: 1px solid #CBD5E1;
+    border: 1px solid #C8D3DF;
     border-radius: 0;
     outline: 0;
     padding: 0;
@@ -675,7 +675,7 @@ QComboBox QAbstractItemView {
 
 QComboBox QAbstractItemView::item {
     background: #FFFFFF;
-    color: #0F172A;
+    color: #101820;
     min-height: 28px;
     padding: 6px 10px;
 }
@@ -688,14 +688,14 @@ QComboBox QAbstractItemView::item:selected {
 
 QCheckBox {
     background: transparent;
-    color: #0F172A;
+    color: #101820;
     font-weight: 650;
     spacing: 7px;
 }
 
 QCheckBox::indicator {
     background: #FFFFFF;
-    border: 1px solid #94A3B8;
+    border: 1px solid #A7B3C2;
     border-radius: 5px;
     height: 17px;
     width: 17px;
@@ -713,9 +713,9 @@ QCheckBox::indicator:checked {
 
 QRadioButton {
     background: #FFFFFF;
-    border: 1px solid #CBD5E1;
+    border: 1px solid #C8D3DF;
     border-radius: 10px;
-    color: #0F172A;
+    color: #101820;
     font-weight: 750;
     padding: 8px 11px;
     spacing: 7px;
@@ -723,7 +723,7 @@ QRadioButton {
 
 QRadioButton:hover {
     background: #F8FAFC;
-    border-color: #94A3B8;
+    border-color: #A7B3C2;
 }
 
 QRadioButton:checked {
@@ -734,7 +734,7 @@ QRadioButton:checked {
 
 QRadioButton::indicator {
     background: #FFFFFF;
-    border: 1px solid #94A3B8;
+    border: 1px solid #A7B3C2;
     border-radius: 7px;
     height: 15px;
     width: 15px;
@@ -762,8 +762,8 @@ QPushButton:pressed {
 }
 
 QPushButton:disabled {
-    background: #CBD5E1;
-    color: #64748B;
+    background: #C8D3DF;
+    color: #708195;
 }
 
 #primaryButton,
@@ -808,12 +808,12 @@ QPushButton:disabled {
 #neutralButton,
 #neutralDialogButton {
     background: #E2E8F0;
-    color: #0F172A;
+    color: #101820;
 }
 
 #neutralButton:hover,
 #neutralDialogButton:hover {
-    background: #CBD5E1;
+    background: #C8D3DF;
 }
 
 #primaryButton,
@@ -869,14 +869,14 @@ QTableWidget {
     gridline-color: transparent;
     outline: 0;
     selection-background-color: #DBEAFE;
-    selection-color: #0F172A;
+    selection-color: #101820;
 }
 
 QHeaderView::section {
     background: #F1F5F9;
     border: none;
     border-bottom: 1px solid #D7DEE8;
-    color: #334155;
+    color: #314154;
     font-weight: 800;
     padding: 11px 10px;
 }
@@ -888,7 +888,7 @@ QTableWidget::item {
 
 QTableWidget::item:selected {
     background: #DBEAFE;
-    color: #0F172A;
+    color: #101820;
 }
 
 QMessageBox {
@@ -897,7 +897,7 @@ QMessageBox {
 
 QMessageBox QLabel {
     background: transparent;
-    color: #0F172A;
+    color: #101820;
     font-size: 13px;
 }
 
@@ -923,13 +923,13 @@ QScrollBar:vertical {
 }
 
 QScrollBar::handle:vertical {
-    background: #CBD5E1;
+    background: #C8D3DF;
     border-radius: 6px;
     min-height: 34px;
 }
 
 QScrollBar::handle:vertical:hover {
-    background: #94A3B8;
+    background: #A7B3C2;
 }
 
 QScrollBar::add-line:vertical,
@@ -944,5 +944,3 @@ QScrollBar::sub-page:vertical {
     "__RADIO_DOT_ICON_URL__",
     RADIO_DOT_ICON_URL,
 )
-
-MODERN_WIDGET_STYLESHEET = build_modern_widget_stylesheet()

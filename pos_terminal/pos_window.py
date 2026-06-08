@@ -80,7 +80,7 @@ from ui.thumbnail_cache import ThumbnailCache
 ACCENT_BLUE = "#2563EB"
 ACCENT_GREEN = "#0F766E"
 ACCENT_ORANGE = "#F97316"
-TEXT_DARK = "#1F2937"
+TEXT_DARK = "#1F2A37"
 TEXT_MUTED = "#5F6B7A"
 BORDER = "#D7DEE8"
 PANEL_BG = "#F5F7FA"
@@ -231,7 +231,7 @@ class PosMainWindow(QMainWindow):
         self.sidebar_toggle_button: QPushButton | None = None
         self.central_container: QWidget | None = None
         self.logout_button: QPushButton | None = None
-        self.theme_toggle_button: QPushButton | None = None
+        self.theme_mode_button: QPushButton | None = None
         self.logout_requested = False
         self.cloud_sync_running = False
         self.realtime_thread: QThread | None = None
@@ -900,11 +900,7 @@ class PosMainWindow(QMainWindow):
 
         layout.addStretch(1)
 
-        self.theme_toggle_button = QPushButton("Dark Mode")
-        self.theme_toggle_button.setObjectName("neutralButton")
-        self.theme_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.theme_toggle_button.clicked.connect(self.toggle_theme_mode)
-        layout.addWidget(self.theme_toggle_button)
+        layout.addWidget(self.create_theme_mode_controls())
 
         self.logout_button = QPushButton("Logout")
         self.logout_button.setObjectName("logoutButton")
@@ -916,7 +912,7 @@ class PosMainWindow(QMainWindow):
         self.logout_button.clicked.connect(self.request_logout)
         layout.addWidget(self.logout_button)
 
-        self.update_theme_toggle_button_text()
+        self.update_theme_mode_button()
 
         footer = QLabel("Developed by DevTeam2")
         footer.setObjectName("sidebarFooter")
@@ -925,34 +921,57 @@ class PosMainWindow(QMainWindow):
 
         return sidebar
 
-    def update_theme_toggle_button_text(self) -> None:
-        if self.theme_toggle_button is None:
+    def create_theme_mode_controls(self) -> QWidget:
+        container = QFrame()
+        container.setObjectName("themeModeControl")
+
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.theme_mode_button = QPushButton()
+        self.theme_mode_button.setObjectName("themeModeButton")
+        self.theme_mode_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.theme_mode_button.setFixedSize(40, 38)
+        self.theme_mode_button.clicked.connect(self.toggle_theme_mode)
+
+        layout.addWidget(self.theme_mode_button)
+        layout.addStretch(1)
+        self.update_theme_mode_button()
+        return container
+
+    def update_theme_mode_button(self) -> None:
+        if self.theme_mode_button is None:
             return
+
         current = get_theme_mode()
         if current == THEME_DARK:
-            self.theme_toggle_button.setText("Light Mode")
-            self.theme_toggle_button.setToolTip("Switch to light mode")
+            icon_name = "sun"
+            icon_color = "#FBBF24"
+            tooltip = "Switch to light mode"
+            next_mode = THEME_LIGHT
         else:
-            self.theme_toggle_button.setText("Dark Mode")
-            self.theme_toggle_button.setToolTip("Switch to dark mode")
+            icon_name = "moon"
+            icon_color = IconManager.MUTED
+            tooltip = "Switch to dark mode"
+            next_mode = THEME_DARK
+
+        self.theme_mode_button.setProperty("nextMode", next_mode)
+        self.theme_mode_button.setIcon(IconManager.icon(icon_name, icon_color))
+        self.theme_mode_button.setIconSize(QSize(18, 18))
+        self.theme_mode_button.setToolTip(tooltip)
+        self.theme_mode_button.style().unpolish(self.theme_mode_button)
+        self.theme_mode_button.style().polish(self.theme_mode_button)
+
+    def set_theme_mode_explicit(self, mode: str) -> None:
+        set_theme_mode(mode)
+        apply_current_theme()
+        self.update_theme_mode_button()
 
     def toggle_theme_mode(self) -> None:
         current = get_theme_mode()
         next_mode = THEME_LIGHT if current == THEME_DARK else THEME_DARK
-        set_theme_mode(next_mode)
-        app = QApplication.instance()
-        if app is not None:
-            app.setStyleSheet(build_stylesheet() + build_modern_widget_stylesheet())
-            install_combobox_popup_fix(app)
-            # Reapply any widget-specific styles that windows expose via apply_styles()
-            try:
-                for w in app.topLevelWidgets():
-                    apply_fn = getattr(w, "apply_styles", None)
-                    if callable(apply_fn):
-                        apply_fn()
-            except Exception:
-                pass
-        self.update_theme_toggle_button_text()
+        self.set_theme_mode_explicit(next_mode)
 
     def create_sidebar_toggle_button(self) -> None:
         if self.central_container is None:
@@ -2459,40 +2478,40 @@ class PosMainWindow(QMainWindow):
 def build_stylesheet() -> str:
     active = get_theme_mode()
     if active == THEME_DARK:
-        text_dark = "#E5E7EB"
-        text_muted = "#94A3B8"
-        border = "#334155"
-        panel_bg = "#111827"
-        window_bg = "#0F172A"
-        sidebar_bg = "#111827"
-        sidebar_hover_bg = "#1E2937"
-        sidebar_active_bg = "rgba(37, 99, 235, 0.22)"
-        product_card_bg = "#111827"
-        product_card_hover_bg = "#1D2937"
-        product_card_out_of_stock_bg = "#111827"
-        product_image_placeholder_bg = "#0F172A"
-        product_image_placeholder_border = "#334155"
-        dashboard_card_bg = "#111827"
-        input_bg = "#111827"
-        input_border = "#334155"
-        table_bg = "#111827"
-        table_alt_bg = "#0F172A"
-        table_header_bg = "#111827"
-        table_item_border = "#1F2937"
-        scrollbar_bg = "#0F172A"
-        scrollbar_handle = "#4B5563"
-        scrollbar_handle_hover = "#6B7280"
-        keypad_bg = "#111827"
-        keypad_hover_bg = "#1E2937"
-        keypad_pressed_bg = "#111827"
-        action_neutral_bg = "#1F2937"
-        action_neutral_color = "#E5E7EB"
-        payment_dialog_panel_bg = "#111827"
-        payment_qr_panel_bg = "#0F172A"
-        payment_qr_preview_bg = "#111827"
-        table_delete_hover_bg = "#1F2937"
-        neutral_dialog_bg = "#1F2937"
-        neutral_dialog_color = "#E5E7EB"
+        text_dark = "#E6EDF3"
+        text_muted = "#A7B3C2"
+        border = "#314154"
+        panel_bg = "#17212B"
+        window_bg = "#101820"
+        sidebar_bg = "#17212B"
+        sidebar_hover_bg = "#1F2A37"
+        sidebar_active_bg = "rgba(96, 165, 250, 0.20)"
+        product_card_bg = "#17212B"
+        product_card_hover_bg = "#223041"
+        product_card_out_of_stock_bg = "#17212B"
+        product_image_placeholder_bg = "#101820"
+        product_image_placeholder_border = "#314154"
+        dashboard_card_bg = "#17212B"
+        input_bg = "#17212B"
+        input_border = "#314154"
+        table_bg = "#17212B"
+        table_alt_bg = "#101820"
+        table_header_bg = "#17212B"
+        table_item_border = "#1F2A37"
+        scrollbar_bg = "#101820"
+        scrollbar_handle = "#546577"
+        scrollbar_handle_hover = "#7B8A9A"
+        keypad_bg = "#17212B"
+        keypad_hover_bg = "#1F2A37"
+        keypad_pressed_bg = "#17212B"
+        action_neutral_bg = "#1F2A37"
+        action_neutral_color = "#E6EDF3"
+        payment_dialog_panel_bg = "#17212B"
+        payment_qr_panel_bg = "#101820"
+        payment_qr_preview_bg = "#17212B"
+        table_delete_hover_bg = "#1F2A37"
+        neutral_dialog_bg = "#1F2A37"
+        neutral_dialog_color = "#E6EDF3"
     else:
         text_dark = TEXT_DARK
         text_muted = TEXT_MUTED
@@ -2526,7 +2545,7 @@ def build_stylesheet() -> str:
         payment_qr_panel_bg = "#F8FAFC"
         payment_qr_preview_bg = "#FFFFFF"
         table_delete_hover_bg = "#FEF2F2"
-        neutral_dialog_bg = "#E5E7EB"
+        neutral_dialog_bg = "#E6EDF3"
         neutral_dialog_color = TEXT_DARK
 
     return f"""
@@ -2584,6 +2603,36 @@ def build_stylesheet() -> str:
     #sidebarToggleButton:hover {{
         background: {sidebar_hover_bg};
         border-color: rgba(37, 99, 235, 0.35);
+    }}
+
+    #themeModeControl {{
+        background: transparent;
+    }}
+
+    #themeModeButton {{
+        background: transparent;
+        border: 1px solid {border};
+        border-radius: 8px;
+        min-height: 38px;
+        max-height: 38px;
+        min-width: 40px;
+        max-width: 40px;
+        padding: 0;
+    }}
+
+    #themeModeButton:hover {{
+        background: {sidebar_hover_bg};
+        border-color: rgba(96, 165, 250, 0.45);
+    }}
+
+    #themeModeButton[nextMode="dark"] {{
+        background: transparent;
+        border-color: #60A5FA;
+    }}
+
+    #themeModeButton[nextMode="light"] {{
+        background: transparent;
+        border-color: #FBBF24;
     }}
 
     #workspaceTitle {{
@@ -2677,7 +2726,7 @@ def build_stylesheet() -> str:
 
     #productCard[outOfStock="true"] {{
         background: {product_card_out_of_stock_bg};
-        border-color: #CBD5E1;
+        border-color: #C8D3DF;
     }}
 
     #productImagePlaceholder {{
@@ -3040,6 +3089,36 @@ def build_stylesheet() -> str:
 
 def configure_app_font(app) -> None:
     app.setStyle("Fusion")
-    app.setStyleSheet(build_stylesheet() + build_modern_widget_stylesheet())
-    install_combobox_popup_fix(app)
+    apply_current_theme(app)
     app.setFont(QFont("Segoe UI", 10))
+
+
+def apply_current_theme(app: QApplication | None = None) -> None:
+    target_app = app or QApplication.instance()
+    if target_app is None:
+        return
+
+    target_app.setStyleSheet(build_stylesheet() + build_modern_widget_stylesheet())
+
+    widgets = list(target_app.allWidgets())
+    for widget in widgets:
+        apply_fn = getattr(widget, "apply_styles", None)
+        if not callable(apply_fn):
+            continue
+        try:
+            apply_fn()
+        except RuntimeError:
+            continue
+        except Exception:
+            continue
+
+    for widget in list(target_app.allWidgets()):
+        try:
+            style = widget.style()
+            style.unpolish(widget)
+            style.polish(widget)
+            widget.update()
+        except RuntimeError:
+            continue
+
+    install_combobox_popup_fix(target_app)
