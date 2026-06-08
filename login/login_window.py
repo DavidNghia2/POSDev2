@@ -24,7 +24,7 @@ from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.icon_manager import IconManager
 from ui.loading import BackgroundTaskRunner
 from ui.notifications import friendly_error
-from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.theme import build_modern_widget_stylesheet, THEME_DARK, THEME_LIGHT, get_theme_mode, set_theme_mode
 from app_paths import database_path
 from cloud import auth as cloud_auth
 from cloud import inventory as cloud_inventory
@@ -1319,6 +1319,18 @@ class LoginWindow(QDialog):
         heading.addWidget(logo_label)
         heading.addLayout(heading_text)
         heading.addStretch(1)
+        
+        # Theme toggle button
+        self.theme_toggle = QPushButton()
+        self.theme_toggle.setObjectName("themeToggleButton")
+        self.theme_toggle.setFixedSize(36, 36)
+        self.theme_toggle.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.theme_toggle.setToolTip("Toggle dark/light mode")
+        
+        self.update_theme_toggle_icon()
+        self.theme_toggle.clicked.connect(self.toggle_theme)
+        heading.addWidget(self.theme_toggle, 0, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
+        
         tablet_layout.addLayout(heading)
 
         content = QHBoxLayout()
@@ -1656,6 +1668,20 @@ class LoginWindow(QDialog):
             self.set_feedback(self.error_label, "Authentication is already running.")
             self.set_login_busy(False)
 
+    def toggle_theme(self) -> None:
+        """Toggle between dark and light theme modes."""
+        current_theme = get_theme_mode()
+        next_theme = THEME_LIGHT if current_theme == THEME_DARK else THEME_DARK
+        set_theme_mode(next_theme)
+        self.update_theme_toggle_icon()
+        self.apply_styles()
+
+    def update_theme_toggle_icon(self) -> None:
+        """Update theme toggle button icon based on current theme."""
+        current_theme = get_theme_mode()
+        icon_name = "sun" if current_theme == THEME_DARK else "moon"
+        IconManager.apply_button(self.theme_toggle, icon_name, size=20)
+
     def handle_register(self) -> None:
         store_name = self.register_store_input.text().strip()
         full_name = self.register_full_name_input.text().strip()
@@ -1733,8 +1759,178 @@ class LoginWindow(QDialog):
         return self.current_user
 
     def apply_styles(self) -> None:
-        self.setStyleSheet(
+        mode = get_theme_mode()
+        if mode == THEME_DARK:
+            styles = """
+            QDialog {
+                background: #0F172A;
+            }
+
+            QLabel {
+                background: transparent;
+            }
+
+            #tabletFrame {
+                background: #111827;
+                border: 34px solid #0F172A;
+                border-radius: 42px;
+            }
+
+            #appTitle {
+                color: #E5E7EB;
+                font-size: 30px;
+                font-weight: 900;
+            }
+
+            #appSubtitle {
+                color: #CBD5E1;
+                font-size: 16px;
+                font-weight: 700;
+            }
+
+            #creatorCredit {
+                color: #94A3B8;
+                font-size: 11px;
+                font-weight: 600;
+            }
+
+            #loginCard {
+                background: #111827;
+                border-radius: 12px;
+                border: 1px solid #334155;
+            }
+
+            #authStack {
+                background: transparent;
+            }
+
+            #loginTitle {
+                color: #E5E7EB;
+                font-size: 28px;
+                font-weight: 900;
+            }
+
+            #authHint {
+                color: #94A3B8;
+                font-size: 12px;
+                font-weight: 650;
+            }
+
+            #inputRow {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 7px;
+            }
+
+            #inputRow[focused="true"] {
+                background: #1E293B;
+                border: 2px solid #3B82F6;
+                border-radius: 7px;
+            }
+
+            #iconSeparator {
+                background: #334155;
+                border: none;
+                min-height: 22px;
+                max-height: 22px;
+            }
+
+            #cardInput {
+                background: transparent;
+                border: none;
+                color: #E5E7EB;
+                font-size: 14px;
+                padding: 0;
+                min-height: 34px;
+            }
+
+            #inputRow #cardInput,
+            #inputRow[focused="true"] #cardInput {
+                background: transparent;
+                border: none;
+                color: #E5E7EB;
+            }
+
+            #passwordToggleButton {
+                background: transparent;
+                border: none;
+                border-radius: 6px;
+                min-width: 20px;
+                max-width: 20px;
+                min-height: 24px;
+                max-height: 24px;
+                padding: 0;
+            }
+
+            #passwordToggleButton:hover {
+                background: #1E293B;
+            }
+
+            #rememberLabel {
+                color: #E5E7EB;
+                font-size: 13px;
+                font-weight: 700;
+            }
+
+            #loginButton {
+                background: #1F77FF;
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-size: 18px;
+                font-weight: 800;
+            }
+
+            #loginButton:hover {
+                background: #1768E8;
+            }
+
+            #loginButton:pressed {
+                background: #1157C7;
+            }
+
+            #registerButton {
+                background: #1E3A5F;
+                border: 1px solid #3B5998;
+                border-radius: 8px;
+                color: #60A5FA;
+                font-size: 14px;
+                font-weight: 800;
+            }
+
+            #registerButton:hover {
+                background: #1F4A6B;
+            }
+
+            #errorLabel {
+                color: #EF5350;
+                font-size: 12px;
+                font-weight: 700;
+                line-height: 16px;
+            }
+
+            #errorLabel[feedback="success"] {
+                color: #66BB6A;
+            }
+
+            #themeToggleButton {
+                background: transparent;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                color: #CBD5E1;
+            }
+
+            #themeToggleButton:hover {
+                background: #1E293B;
+                border-color: #475569;
+            }
+
+            #themeToggleButton:pressed {
+                background: #0F172A;
+            }
             """
+        else:
+            styles = """
             QDialog {
                 background: #DDE1E6;
             }
@@ -1884,8 +2080,23 @@ class LoginWindow(QDialog):
                 color: #059669;
             }
 
-            """ + MODERN_WIDGET_STYLESHEET
-        )
+            #themeToggleButton {
+                background: #F3F7FD;
+                border: 1px solid #D8E0E8;
+                border-radius: 8px;
+                color: #334155;
+            }
+
+            #themeToggleButton:hover {
+                background: #EEF2F8;
+                border-color: #CBD5E1;
+            }
+
+            #themeToggleButton:pressed {
+                background: #E8ECEF;
+            }
+            """
+        self.setStyleSheet(styles + build_modern_widget_stylesheet())
 
 
 def show_login() -> dict[str, Any] | None:

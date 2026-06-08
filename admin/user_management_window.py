@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -34,8 +35,66 @@ from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.loading import BlockingTaskRunner, USER_SYNC_TIMEOUT_MS
 from ui.notifications import friendly_error
-from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.theme import build_modern_widget_stylesheet, THEME_DARK, THEME_LIGHT, get_theme_mode
 
+
+
+
+
+def _polish_user_action_button(button, kind="neutral"):
+    """Apply compact, centered styling for user-management action buttons."""
+    try:
+        from PyQt6.QtCore import Qt, QSize
+        from PyQt6.QtWidgets import QSizePolicy
+    except Exception:
+        return button
+
+    palette = {
+        "edit": ("#2563eb", "#eff6ff", "#bfdbfe", "#dbeafe"),
+        "active": ("#ffffff", "#0f766e", "#0f766e", "#115e59"),
+        "inactive": ("#475569", "#f8fafc", "#cbd5e1", "#f1f5f9"),
+        "delete": ("#e11d48", "#fff1f2", "#fecdd3", "#ffe4e6"),
+        "neutral": ("#334155", "#f8fafc", "#cbd5e1", "#f1f5f9"),
+    }
+    color, bg, border, hover = palette.get(kind, palette["neutral"])
+    selector = f"#{button.objectName()}" if button.objectName() else button.metaObject().className()
+    button.setFixedSize(QSize(36, 36))
+    button.setMinimumSize(QSize(36, 36))
+    button.setMaximumSize(QSize(36, 36))
+    button.setIconSize(QSize(17, 17))
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+    button.setStyleSheet(f"""
+        {selector} {{
+            min-width: 36px;
+            max-width: 36px;
+            min-height: 36px;
+            max-height: 36px;
+            color: {color};
+            background: {bg};
+            border: 1px solid {border};
+            border-radius: 10px;
+            padding: 0;
+            margin: 0;
+            font-size: 14px;
+            font-weight: 700;
+            text-align: center;
+        }}
+        {selector}:hover {{
+            background: {hover};
+            border-color: {color};
+            color: {color};
+        }}
+        {selector}:pressed {{
+            background: {border};
+        }}
+        {selector}:disabled {{
+            color: #94a3b8;
+            background: #f1f5f9;
+            border-color: #e2e8f0;
+        }}
+    """)
+    return button
 
 def row_value(row: Any, key: str, default: Any = None) -> Any:
     try:
@@ -205,8 +264,63 @@ class UserEditDialog(QDialog):
             self.feedback_label.setText("A user sync task is already running.")
 
     def apply_styles(self) -> None:
-        self.setStyleSheet(
+        mode = get_theme_mode()
+        if mode == THEME_DARK:
+            styles = """
+            QDialog {
+                background: #0F172A;
+            }
+            #dialogTitle {
+                color: #F3F4F6;
+                font-size: 20px;
+                font-weight: 800;
+            }
+            #formLabel, #dialogFeedback {
+                color: #D1D5DB;
+                font-size: 12px;
+                font-weight: 700;
+            }
+            #dialogFeedback {
+                color: #EF4444;
+            }
+            #changePasswordCheck {
+                color: #E5E7EB;
+                font-size: 13px;
+                font-weight: 800;
+                spacing: 8px;
+            }
+            #changePasswordCheck::indicator {
+                width: 16px;
+                height: 16px;
+            }
+            QLineEdit, QComboBox {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 9px 11px;
+                color: #E5E7EB;
+            }
+            QPushButton {
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-weight: 800;
+                padding: 10px 14px;
+            }
+            #primaryButton {
+                background: #3B82F6;
+            }
+            #neutralButton {
+                background: #475569;
+                color: #E5E7EB;
+            }
+            QPushButton:disabled {
+                background: #475569;
+                color: #9CA3AF;
+            }
             """
+        else:
+            styles = """
             QDialog {
                 background: #EEF1F4;
             }
@@ -257,8 +371,8 @@ class UserEditDialog(QDialog):
                 background: #CBD5E1;
                 color: #64748B;
             }
-            """ + MODERN_WIDGET_STYLESHEET
-        )
+            """
+        self.setStyleSheet(styles + build_modern_widget_stylesheet())
 
 
 class StatusToggle(QPushButton):
@@ -267,30 +381,55 @@ class StatusToggle(QPushButton):
         self.setCheckable(True)
         self.setChecked(checked)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedSize(48, 26)
+        self.setFixedSize(52, 28)
         self.setText("")
         # Reset CSS để tránh padding thừa kế từ QPushButton gây lệch layout ô
-        self.setStyleSheet("background: transparent; border: none; padding: 0;")
+        self.setStyleSheet("""
+            QPushButton {
+                min-width: 52px;
+                max-width: 52px;
+                min-height: 28px;
+                max-height: 28px;
+                background: transparent;
+                border: none;
+                padding: 0;
+                margin: 0;
+            }
+        """)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        track_color = QColor("#0F766E") if self.isChecked() else QColor("#CBD5E1")
+        width = self.width()
+        height = self.height()
+        track = QRectF(1, 2, width - 2, height - 4)
+        knob_size = height - 8
+        knob_x = width - knob_size - 5 if self.isChecked() else 5
+        knob_y = 4
+        track_color = QColor("#0F766E") if self.isChecked() else QColor("#E2E8F0")
+        track_border = QColor("#0D9488") if self.isChecked() else QColor("#CBD5E1")
+        symbol_color = QColor("#FFFFFF") if self.isChecked() else QColor("#64748B")
+        knob_shadow = QColor(15, 23, 42, 28)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(track_color)
-        painter.drawRoundedRect(QRectF(0, 1, 48, 24), 12, 12)
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
+        painter.setPen(QPen(track_border, 1))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(track, track.height() / 2, track.height() / 2)
 
-        knob_x = 24 if self.isChecked() else 3
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(knob_shadow)
+        painter.drawEllipse(QRectF(knob_x, knob_y + 1, knob_size, knob_size))
         painter.setBrush(QColor("#FFFFFF"))
-        painter.drawEllipse(QRectF(knob_x, 4, 18, 18))
+        painter.drawEllipse(QRectF(knob_x, knob_y, knob_size, knob_size))
 
-        painter.setPen(QPen(QColor("#FFFFFF") if self.isChecked() else QColor("#64748B"), 2))
+        painter.setPen(QPen(symbol_color, 2))
         if self.isChecked():
-            painter.drawLine(12, 14, 16, 18)
-            painter.drawLine(16, 18, 22, 10)
+            painter.drawLine(13, 15, 17, 19)
+            painter.drawLine(17, 19, 24, 10)
         else:
-            painter.drawLine(30, 10, 36, 16)
-            painter.drawLine(36, 10, 30, 16)
+            painter.drawLine(width - 18, 11, width - 11, 18)
+            painter.drawLine(width - 11, 11, width - 18, 18)
 
 
 class UserManagementWindow(QWidget):
@@ -416,9 +555,10 @@ class UserManagementWindow(QWidget):
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(5, QHeaderView.ResizeMode.Fixed)
         
         self.users_table.setColumnWidth(1, 160)
+        self.users_table.setColumnWidth(5, 184)
         self.users_table.verticalHeader().setDefaultSectionSize(52)
         layout.addWidget(self.users_table, 1)
 
@@ -502,12 +642,21 @@ class UserManagementWindow(QWidget):
     def create_actions_widget(self, user: Any) -> QWidget:
         row = QWidget()
         row.setObjectName("actionsCell")
+        row.setFixedSize(184, 52)
+        row.setStyleSheet("""
+            QWidget#actionsCell {
+                background: transparent;
+                border: none;
+            }
+        """)
         
         layout = QHBoxLayout(row)
-        layout.setContentsMargins(12, 4, 12, 4) # Tạo lề an toàn 2 bên (trái, phải) cho đẹp
-        layout.setSpacing(8) # Khoảng cách tự nhiên giữa 3 nút
+        layout.setContentsMargins(10, 0, 10, 0)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         edit_button = self.icon_action_button("Edit user", "edit", "editIconButton")
+        _polish_user_action_button(edit_button, "edit")
         edit_button.clicked.connect(lambda _checked=False, u=user: self.open_edit_dialog(u))
         
         active = bool(row_value(user, "active"))
@@ -516,6 +665,7 @@ class UserManagementWindow(QWidget):
         toggle_button.clicked.connect(lambda _checked=False, u=user, b=toggle_button: self.toggle_user_active(u, b))
         
         delete_button = self.icon_action_button("Delete user", "delete", "deleteIconButton")
+        _polish_user_action_button(delete_button, "delete")
         delete_button.clicked.connect(lambda _checked=False, u=user: self.soft_delete_user_action(u))
 
         layout.addWidget(edit_button)
@@ -524,14 +674,15 @@ class UserManagementWindow(QWidget):
         
         return row
 
-    def icon_action_button(self, tooltip: str, icon_key: str, object_name: str) -> QPushButton:
-        button = QPushButton()
+    def icon_action_button(self, tooltip: str, icon_key: str, object_name: str) -> QToolButton:
+        button = QToolButton()
         button.setObjectName(object_name)
-        button.setFixedSize(32, 30)
+        button.setFixedSize(36, 36)
         button.setToolTip(tooltip)
-        icon_color = "#DC2626" if object_name == "deleteIconButton" else "#0F766E"
+        button.setAutoRaise(False)
+        icon_color = "#E11D48" if object_name == "deleteIconButton" else "#2563EB"
         button.setIcon(IconManager.icon(icon_key, icon_color))
-        button.setIconSize(QSize(15, 15))
+        button.setIconSize(QSize(17, 17))
         return button
 
     def make_table_item(self, value: str, alignment: Qt.AlignmentFlag) -> QTableWidgetItem:
@@ -875,24 +1026,26 @@ class UserManagementWindow(QWidget):
             }
             QTableWidget {
                 background: #FFFFFF;
-                border: 1px solid #D8E0E8;
+                border: 1px solid #D9E3EE;
                 border-radius: 8px;
-                alternate-background-color: #F7F9FB;
+                alternate-background-color: #F8FAFC;
                 gridline-color: transparent;
+                selection-background-color: #E0F2FE;
+                selection-color: #0F172A;
             }
             QHeaderView::section {
-                background: #F0F4F8;
+                background: #F1F5F9;
                 border: none;
-                border-bottom: 1px solid #D8E0E8;
-                color: #25313D;
+                border-bottom: 1px solid #D9E3EE;
+                color: #1E293B;
                 font-weight: 800;
-                padding: 10px;
+                padding: 11px 10px;
             }
             QTableWidget::item {
-                border-bottom: 1px solid #EDF1F5;
-                padding: 8px;
+                border-bottom: 1px solid #EDF2F7;
+                padding: 8px 10px;
             }
-            """ + MODERN_WIDGET_STYLESHEET
+            """ + build_modern_widget_stylesheet()
         )
 
     def showEvent(self, event) -> None:

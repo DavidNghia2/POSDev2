@@ -3,9 +3,11 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PyQt6.QtCore import QPoint, Qt, pyqtSignal
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QCompleter,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -13,7 +15,6 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
     QTabWidget,
     QTextEdit,
     QVBoxLayout,
@@ -21,10 +22,10 @@ from PyQt6.QtWidgets import (
 )
 
 from login import get_setting, log_audit, set_setting
-from ui.currency import CURRENCY_OPTIONS, DEFAULT_CURRENCY_SYMBOL, normalize_currency_symbol
+from ui.currency import CURRENCY_OPTIONS, DEFAULT_CURRENCY_CODE, normalize_currency_code
 from ui.icon_manager import IconManager
 from ui.notifications import friendly_error
-from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.theme import build_modern_widget_stylesheet, THEME_DARK, THEME_LIGHT, get_theme_mode
 from ui.qr_display import qr_focus_pixmap
 
 
@@ -34,108 +35,46 @@ PAYMENT_QR_SETTING_KEY = "bank_qr_image_path"
 QR_PREVIEW_SIZE = 260
 
 
-class CurrencySelect(QWidget):
-    currentIndexChanged = pyqtSignal(int)
-
+class CurrencySelect(QComboBox):
     def __init__(
         self,
         options: tuple[tuple[str, str], ...],
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.options = list(options)
-        self.current_index = 0
-        self.option_buttons: list[QPushButton] = []
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.setMaxVisibleItems(12)
+        self.setMinimumContentsLength(34)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.view().setObjectName("settingsSelectList")
+        self.lineEdit().setPlaceholderText("Search currency")
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(0)
+        for label, code in options:
+            self.addItem(label, code)
 
-        self.button = QPushButton()
-        self.button.setObjectName("settingsSelectButton")
-        self.button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.button.clicked.connect(self.toggle_popup)
-        layout.addWidget(self.button)
+        completer = QCompleter([label for label, _code in options], self)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        completer.popup().setObjectName("settingsSelectList")
+        self.setCompleter(completer)
 
-        popup_flags = (
-            Qt.WindowType.Popup
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.NoDropShadowWindowHint
-        )
-        self.popup = QFrame(self, popup_flags)
-        self.popup.setObjectName("settingsSelectPopupFrame")
-        self.popup.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.popup.setFrameShape(QFrame.Shape.NoFrame)
-
-        popup_layout = QVBoxLayout(self.popup)
-        popup_layout.setContentsMargins(6, 6, 6, 6)
-        popup_layout.setSpacing(2)
-
-        for index, (label, _value) in enumerate(self.options):
-            option_button = QPushButton(label)
-            option_button.setObjectName("settingsSelectOption")
-            option_button.setCursor(Qt.CursorShape.PointingHandCursor)
-            option_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            option_button.clicked.connect(
-                lambda _checked=False, selected_index=index: self.select_index(selected_index)
-            )
-            popup_layout.addWidget(option_button)
-            self.option_buttons.append(option_button)
-
-        self.update_display()
-
-    def count(self) -> int:
-        return len(self.options)
-
-    def currentData(self) -> str:
-        if not self.options:
-            return ""
-        return self.options[self.current_index][1]
+    def currentData(self, role: int = int(Qt.ItemDataRole.UserRole)) -> str:
+        if role != int(Qt.ItemDataRole.UserRole):
+            return super().currentData(role) or ""
+        current_text = self.currentText().strip()
+        for index in range(self.count()):
+            if self.itemText(index) == current_text:
+                return self.itemData(index, Qt.ItemDataRole.UserRole)
+        return super().currentData(Qt.ItemDataRole.UserRole) or DEFAULT_CURRENCY_CODE
 
     def findData(self, value: str) -> int:
-        for index, (_label, option_value) in enumerate(self.options):
-            if option_value == value:
+        code = normalize_currency_code(value)
+        for index in range(self.count()):
+            if self.itemData(index) == code:
                 return index
         return -1
-
-    def setCurrentIndex(self, index: int) -> None:
-        if index < 0 or index >= len(self.options):
-            return
-        if self.current_index == index:
-            self.update_display()
-            return
-        self.current_index = index
-        self.update_display()
-        self.currentIndexChanged.emit(index)
-
-    def select_index(self, index: int) -> None:
-        self.setCurrentIndex(index)
-        self.popup.hide()
-
-    def toggle_popup(self) -> None:
-        if self.popup.isVisible():
-            self.popup.hide()
-            return
-        self.show_popup()
-
-    def show_popup(self) -> None:
-        self.popup.setFixedWidth(self.button.width())
-        self.popup.adjustSize()
-        self.popup.move(self.button.mapToGlobal(QPoint(0, self.button.height() + 4)))
-        self.popup.show()
-        self.popup.raise_()
-
-    def update_display(self) -> None:
-        if not self.options:
-            self.button.setText("")
-            return
-
-        self.button.setText(f"{self.options[self.current_index][0]}  v")
-        for index, option_button in enumerate(self.option_buttons):
-            option_button.setProperty("selected", index == self.current_index)
-            option_button.style().unpolish(option_button)
-            option_button.style().polish(option_button)
 
 
 class SettingsWindow(QWidget):
@@ -373,10 +312,10 @@ class SettingsWindow(QWidget):
         self.store_phone_input.setText(get_setting("store_phone") or "")
         self.store_email_input.setText(get_setting("store_email") or "")
 
-        currency_symbol = normalize_currency_symbol(
+        currency_code = normalize_currency_code(
             get_setting("currency_symbol") or get_setting("currency")
         )
-        currency_index = self.currency_combo.findData(currency_symbol)
+        currency_index = self.currency_combo.findData(currency_code)
         self.currency_combo.setCurrentIndex(max(currency_index, 0))
         self.receipt_header_input.setPlainText(get_setting("receipt_header") or "Thank You!")
         self.receipt_footer_input.setPlainText(get_setting("receipt_footer") or "Please come again")
@@ -458,9 +397,9 @@ class SettingsWindow(QWidget):
         QMessageBox.information(self, "Success", "Store information saved successfully")
 
     def save_receipt_settings(self) -> None:
-        currency_symbol = self.currency_combo.currentData() or DEFAULT_CURRENCY_SYMBOL
-        set_setting("currency_symbol", currency_symbol)
-        set_setting("currency", currency_symbol)
+        currency_code = self.currency_combo.currentData() or DEFAULT_CURRENCY_CODE
+        set_setting("currency_symbol", currency_code)
+        set_setting("currency", currency_code)
         set_setting("receipt_header", self.receipt_header_input.toPlainText().strip())
         set_setting("receipt_footer", self.receipt_footer_input.toPlainText().strip())
 
@@ -498,8 +437,232 @@ class SettingsWindow(QWidget):
         QMessageBox.information(self, "Success", "Payment settings saved successfully")
 
     def apply_styles(self) -> None:
-        self.setStyleSheet(
+        mode = get_theme_mode()
+        if mode == THEME_DARK:
+            styles = """
+            QWidget {
+                background: #0F172A;
+                color: #E5E7EB;
+                font-family: "Segoe UI";
+                font-size: 13px;
+            }
+
+            QLabel {
+                background: transparent;
+            }
+
+            #titleLabel {
+                color: #F3F4F6;
+                font-size: 26px;
+                font-weight: 700;
+            }
+
+            #subtitleLabel {
+                color: #D1D5DB;
+                font-size: 13px;
+            }
+
+            #sectionLabel {
+                color: #E5E7EB;
+                font-size: 16px;
+                font-weight: 700;
+            }
+
+            #settingsTabs {
+                background: transparent;
+            }
+
+            QTabWidget::pane {
+                border: none;
+                margin-top: 12px;
+            }
+
+            QTabBar::tab {
+                background: #1E293B;
+                color: #9CA3AF;
+                border: 1px solid #334155;
+                border-radius: 9px;
+                padding: 9px 15px;
+                margin-right: 7px;
+                font-weight: 700;
+            }
+
+            QTabBar::tab:selected {
+                background: #3B82F6;
+                color: #FFFFFF;
+                border-color: #3B82F6;
+            }
+
+            QTabBar::tab:hover:!selected {
+                background: #475569;
+                color: #E5E7EB;
+            }
+
+            #panel {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 12px;
+            }
+
+            #settingsFormPanel {
+                background: transparent;
+                border: none;
+            }
+
+            #qrPreviewCard {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 14px;
+                min-width: 330px;
+            }
+
+            #previewTitle {
+                color: #E5E7EB;
+                font-size: 15px;
+                font-weight: 800;
+            }
+
+            #formLabel {
+                color: #D1D5DB;
+                font-size: 12px;
+                font-weight: 700;
+            }
+
+            #helperText {
+                background: transparent;
+                color: #D1D5DB;
+                font-size: 12px;
+            }
+
+            QLineEdit {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 10px 12px;
+                min-height: 18px;
+                color: #E5E7EB;
+            }
+
+            QLineEdit:focus {
+                border: 1px solid #3B82F6;
+            }
+
+            #settingsSelect {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                color: #E5E7EB;
+                font-weight: 600;
+                min-height: 40px;
+                min-width: 320px;
+                padding: 0 38px 0 12px;
+            }
+
+            #settingsSelect:hover {
+                background: #0F172A;
+                border: 1px solid #475569;
+            }
+
+            #settingsSelect:focus,
+            #settingsSelect:on {
+                border: 1px solid #3B82F6;
+            }
+
+            #settingsSelect::drop-down {
+                border: none;
+                width: 34px;
+            }
+
+            #settingsSelect::down-arrow {
+                image: url(assets/ui_chevron_down.svg);
+                width: 18px;
+                height: 18px;
+                margin-right: 11px;
+            }
+
+            #settingsSelect QLineEdit {
+                background: transparent;
+                border: none;
+                color: #E5E7EB;
+                font-weight: 600;
+                padding: 0;
+                min-height: 36px;
+            }
+
+            #settingsSelectList {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                color: #E5E7EB;
+                outline: none;
+                padding: 6px;
+            }
+
+            #settingsSelectList::item {
+                min-height: 30px;
+                padding: 7px 10px;
+                border-radius: 6px;
+            }
+
+            #settingsSelectList::item:hover,
+            #settingsSelectList::item:selected {
+                background: #1E3A5F;
+                color: #E5E7EB;
+            }
+
+            QPushButton {
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-weight: 700;
+                padding: 6px 12px;
+                min-height: 32px;
+                min-width: 82px;
+            }
+
+            #primaryButton {
+                background: #3B82F6;
+            }
+
+            #secondaryButton {
+                background: #059669;
+            }
+
+            QPushButton:pressed {
+                padding-top: 7px;
+                padding-bottom: 5px;
+            }
+
+            QCheckBox {
+                background: transparent;
+                spacing: 7px;
+                font-weight: 600;
+                color: #E5E7EB;
+            }
+
+            QCheckBox::indicator {
+                width: 17px;
+                height: 17px;
+                border: 1px solid #475569;
+                border-radius: 5px;
+                background: #1E293B;
+            }
+
+            QCheckBox::indicator:checked {
+                background: #3B82F6;
+                border-color: #3B82F6;
+            }
+
+            #qrPreview {
+                background: #0F172A;
+                border: 1px dashed #475569;
+                border-radius: 12px;
+                color: #9CA3AF;
+                font-weight: 700;
+            }
             """
+        else:
+            styles = """
             QWidget {
                 background: #EEF1F4;
                 color: #1F2933;
@@ -606,56 +769,67 @@ class SettingsWindow(QWidget):
                 border: 1px solid #2563EB;
             }
 
-            #settingsSelectButton {
+            #settingsSelect {
                 background: #FFFFFF;
                 border: 1px solid #C9D3DE;
                 border-radius: 8px;
                 color: #17212B;
                 font-weight: 600;
-                min-height: 42px;
-                min-width: 180px;
-                padding: 0 12px;
-                text-align: left;
+                min-height: 40px;
+                min-width: 320px;
+                padding: 0 38px 0 12px;
             }
 
-            #settingsSelectButton:hover {
+            #settingsSelect:hover {
                 background: #F8FAFC;
                 border: 1px solid #B8C6D5;
             }
 
-            #settingsSelectButton:focus {
+            #settingsSelect:focus,
+            #settingsSelect:on {
                 border: 1px solid #2563EB;
             }
 
-            #settingsSelectButton:pressed {
-                padding: 0 12px;
+            #settingsSelect::drop-down {
+                border: none;
+                width: 34px;
             }
 
-            #settingsSelectPopupFrame {
+            #settingsSelect::down-arrow {
+                image: url(assets/ui_chevron_down.svg);
+                width: 18px;
+                height: 18px;
+                margin-right: 11px;
+            }
+
+            #settingsSelect QLineEdit {
+                background: transparent;
+                border: none;
+                color: #17212B;
+                font-weight: 600;
+                padding: 0;
+                min-height: 36px;
+            }
+
+            #settingsSelectList {
                 background: #FFFFFF;
                 border: 1px solid #D8E0E8;
                 border-radius: 8px;
-            }
-
-            #settingsSelectOption {
-                background: transparent;
-                border: none;
-                border-radius: 6px;
                 color: #17212B;
-                font-weight: 600;
-                min-height: 34px;
-                padding: 0 12px;
-                text-align: left;
+                outline: none;
+                padding: 6px;
             }
 
-            #settingsSelectOption:hover,
-            #settingsSelectOption[selected="true"] {
+            #settingsSelectList::item {
+                min-height: 30px;
+                padding: 7px 10px;
+                border-radius: 6px;
+            }
+
+            #settingsSelectList::item:hover,
+            #settingsSelectList::item:selected {
                 background: #DBEAFE;
                 color: #17212B;
-            }
-
-            #settingsSelectOption:pressed {
-                padding: 0 12px;
             }
 
             QPushButton {
@@ -708,8 +882,8 @@ class SettingsWindow(QWidget):
                 color: #64707D;
                 font-weight: 700;
             }
-            """ + MODERN_WIDGET_STYLESHEET
-        )
+            """
+        self.setStyleSheet(styles + build_modern_widget_stylesheet())
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

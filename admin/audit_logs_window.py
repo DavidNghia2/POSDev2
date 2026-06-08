@@ -17,8 +17,7 @@ from PyQt6.QtWidgets import (
 
 from login import get_audit_logs
 from ui.icon_manager import IconManager
-from ui.theme import MODERN_WIDGET_STYLESHEET
-
+from ui.theme import build_modern_widget_stylesheet, THEME_DARK, THEME_LIGHT, get_theme_mode
 
 def row_value(row, key: str, default: str = ""):
     return row[key] if key in row.keys() and row[key] is not None else default
@@ -213,8 +212,84 @@ class AuditLogsWindow(QWidget):
         return " | ".join(details) if details else "-"
 
     def apply_styles(self) -> None:
-        self.setStyleSheet(
+        mode = get_theme_mode()
+        if mode == THEME_DARK:
+            styles = """
+            QWidget {
+                background: #0F172A;
+                color: #E5E7EB;
+                font-family: "Segoe UI";
+                font-size: 13px;
+            }
+
+            #titleLabel {
+                color: #F3F4F6;
+                font-size: 26px;
+                font-weight: 700;
+            }
+
+            #subtitleLabel {
+                color: #D1D5DB;
+                font-size: 13px;
+            }
+
+            #panel {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 10px;
+            }
+
+            QLineEdit, QComboBox {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 8px 12px;
+                min-width: 100px;
+                color: #E5E7EB;
+            }
+
+            QLineEdit:focus, QComboBox:focus {
+                border: 1px solid #3B82F6;
+            }
+
+            #refreshButton {
+                background: #3B82F6;
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-weight: 700;
+                padding: 10px 16px;
+            }
+
+            #refreshButton:hover {
+                background: #2563EB;
+            }
+
+            QTableWidget {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                alternate-background-color: #0F172A;
+                gridline-color: transparent;
+                color: #E5E7EB;
+            }
+
+            QHeaderView::section {
+                background: #1E293B;
+                border: none;
+                border-bottom: 1px solid #334155;
+                color: #E5E7EB;
+                font-weight: 700;
+                padding: 10px;
+            }
+
+            QTableWidget::item {
+                border-bottom: 1px solid #1E293B;
+                padding: 8px;
+            }
             """
+        else:
+            styles = """
             QWidget {
                 background: #EEF1F4;
                 color: #1F2933;
@@ -285,8 +360,8 @@ class AuditLogsWindow(QWidget):
                 border-bottom: 1px solid #EDF1F5;
                 padding: 8px;
             }
-            """ + MODERN_WIDGET_STYLESHEET
-        )
+            """
+        self.setStyleSheet(styles + build_modern_widget_stylesheet())
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

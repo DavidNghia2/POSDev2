@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import QMessageBox, QWidget
 
-from .theme import MODERN_WIDGET_STYLESHEET
+from .theme import build_modern_widget_stylesheet
 
 
 def confirm_delete(parent: QWidget, message: str, title: str = "Confirm Delete") -> bool:
@@ -25,5 +25,5 @@ def confirm_delete(parent: QWidget, message: str, title: str = "Confirm Delete")
         cancel_button.setText("Cancel")
         cancel_button.setObjectName("neutralButton")
 
-    dialog.setStyleSheet(MODERN_WIDGET_STYLESHEET)
+    dialog.setStyleSheet(build_modern_widget_stylesheet())
     return dialog.exec() == QMessageBox.StandardButton.Yes

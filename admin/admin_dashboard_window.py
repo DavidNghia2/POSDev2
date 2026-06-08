@@ -19,8 +19,7 @@ from database import db
 from login import get_setting
 from ui.currency import format_money, get_currency_symbol_from_settings
 from ui.icon_manager import IconManager
-from ui.theme import MODERN_WIDGET_STYLESHEET
-
+from ui.theme import build_modern_widget_stylesheet, THEME_DARK, THEME_LIGHT, get_theme_mode
 
 def get_sales_summary(start_date: str, end_date: str) -> dict:
     with db.get_connection() as connection:
@@ -452,8 +451,122 @@ class AdminDashboardWindow(QWidget):
             self.top_products_layout.addWidget(no_data_label)
 
     def apply_styles(self) -> None:
-        self.setStyleSheet(
+        mode = get_theme_mode()
+        if mode == THEME_DARK:
+            styles = """
+            QWidget {
+                background: #0F172A;
+                color: #E5E7EB;
+                font-family: "Segoe UI";
+                font-size: 13px;
+            }
+
+            #titleLabel {
+                color: #F3F4F6;
+                font-size: 26px;
+                font-weight: 700;
+            }
+
+            #subtitleLabel {
+                color: #D1D5DB;
+                font-size: 13px;
+            }
+
+            #sectionLabel {
+                color: #E5E7EB;
+                font-size: 15px;
+                font-weight: 700;
+            }
+
+            #panel {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 10px;
+            }
+
+            #statCard {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 10px;
+                min-width: 180px;
+            }
+
+            #statIcon {
+                font-size: 20px;
+            }
+
+            #statTitle {
+                color: #9CA3AF;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            #statValue {
+                color: #F3F4F6;
+                font-size: 24px;
+                font-weight: 800;
+            }
+
+            #statSubtitle {
+                color: #6B7280;
+                font-size: 11px;
+            }
+
+            #paymentMethod {
+                font-weight: 600;
+                min-width: 100px;
+            }
+
+            #paymentCount {
+                color: #9CA3AF;
+            }
+
+            #paymentAmount {
+                font-weight: 700;
+                color: #4ADE80;
+            }
+
+            #productName {
+                font-weight: 500;
+            }
+
+            #productQty {
+                color: #9CA3AF;
+            }
+
+            #productSales {
+                font-weight: 700;
+                color: #4ADE80;
+            }
+
+            #noDataLabel {
+                color: #6B7280;
+                font-style: italic;
+            }
+
+            QLabel {
+                background: transparent;
+            }
+
+            QDateEdit {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 8px 12px;
+                color: #E5E7EB;
+            }
+
+            QDateEdit:focus {
+                border: 1px solid #3B82F6;
+            }
+
+            QDateEdit::drop-down {
+                border: none;
+                width: 24px;
+            }
             """
+        else:
+            styles = """
             QWidget {
                 background: #EEF1F4;
                 color: #1F2933;
@@ -563,8 +676,8 @@ class AdminDashboardWindow(QWidget):
                 border: none;
                 width: 24px;
             }
-            """ + MODERN_WIDGET_STYLESHEET
-        )
+            """
+        self.setStyleSheet(styles + build_modern_widget_stylesheet())
 
     def showEvent(self, event) -> None:
         super().showEvent(event)

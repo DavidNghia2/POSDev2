@@ -32,7 +32,7 @@ from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.loading import BlockingTaskRunner, PRODUCT_SYNC_TIMEOUT_MS
 from ui.notifications import friendly_error
-from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.theme import build_modern_widget_stylesheet
 from ui.thumbnail_cache import ThumbnailCache
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -236,8 +236,7 @@ QTableView::item {
     border-bottom: 1px solid #EDF1F5;
     padding: 8px;
 }
-""" + MODERN_WIDGET_STYLESHEET
-
+""" + build_modern_widget_stylesheet()
 
 def format_barcodes_for_display(barcodes: list[str]) -> str:
     if not barcodes:

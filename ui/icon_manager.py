@@ -68,7 +68,7 @@ class IconManager:
         "items": "mdi6.package-variant-closed",
         "average": "mdi6.chart-timeline-variant-shimmer",
         "add": "mdi6.plus",
-        "edit": "mdi6.pencil-outline",
+        "edit": "mdi6.square-edit-outline",
         "delete": "mdi6.trash-can-outline",
         "clear": "mdi6.close",
         "save": "mdi6.content-save-outline",
@@ -101,6 +101,8 @@ class IconManager:
         "month": "mdi6.calendar-month-outline",
         "sidebar_collapse": "mdi6.chevron-left",
         "sidebar_expand": "mdi6.chevron-right",
+        "moon": "mdi6.moon-waning-crescent",
+        "sun": "mdi6.white-balance-sunny",
     }
 
     _icon_cache: dict[tuple[str, str], QIcon] = {}

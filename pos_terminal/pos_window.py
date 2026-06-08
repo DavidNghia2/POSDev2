@@ -10,6 +10,7 @@ from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequ
 from PyQt6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFormLayout,
     QFrame,
@@ -65,7 +66,14 @@ from login import (
 )
 from ui.app_branding import apply_app_icon, app_logo_pixmap
 from ui.qr_display import qr_focus_pixmap
-from ui.theme import MODERN_WIDGET_STYLESHEET, install_combobox_popup_fix
+from ui.theme import (
+    THEME_DARK,
+    THEME_LIGHT,
+    build_modern_widget_stylesheet,
+    get_theme_mode,
+    install_combobox_popup_fix,
+    set_theme_mode,
+)
 from ui.thumbnail_cache import ThumbnailCache
 
 
@@ -84,6 +92,7 @@ POS_PRODUCT_GRID_LIMIT = 120
 
 
 @dataclass
+
 class CartItem:
     product_id: int
     barcode: str
@@ -222,6 +231,7 @@ class PosMainWindow(QMainWindow):
         self.sidebar_toggle_button: QPushButton | None = None
         self.central_container: QWidget | None = None
         self.logout_button: QPushButton | None = None
+        self.theme_toggle_button: QPushButton | None = None
         self.logout_requested = False
         self.cloud_sync_running = False
         self.realtime_thread: QThread | None = None
@@ -890,6 +900,12 @@ class PosMainWindow(QMainWindow):
 
         layout.addStretch(1)
 
+        self.theme_toggle_button = QPushButton("Dark Mode")
+        self.theme_toggle_button.setObjectName("neutralButton")
+        self.theme_toggle_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.theme_toggle_button.clicked.connect(self.toggle_theme_mode)
+        layout.addWidget(self.theme_toggle_button)
+
         self.logout_button = QPushButton("Logout")
         self.logout_button.setObjectName("logoutButton")
         self.logout_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -900,12 +916,43 @@ class PosMainWindow(QMainWindow):
         self.logout_button.clicked.connect(self.request_logout)
         layout.addWidget(self.logout_button)
 
+        self.update_theme_toggle_button_text()
+
         footer = QLabel("Developed by DevTeam2")
         footer.setObjectName("sidebarFooter")
         self.sidebar_expanded_widgets.append(footer)
         layout.addWidget(footer)
 
         return sidebar
+
+    def update_theme_toggle_button_text(self) -> None:
+        if self.theme_toggle_button is None:
+            return
+        current = get_theme_mode()
+        if current == THEME_DARK:
+            self.theme_toggle_button.setText("Light Mode")
+            self.theme_toggle_button.setToolTip("Switch to light mode")
+        else:
+            self.theme_toggle_button.setText("Dark Mode")
+            self.theme_toggle_button.setToolTip("Switch to dark mode")
+
+    def toggle_theme_mode(self) -> None:
+        current = get_theme_mode()
+        next_mode = THEME_LIGHT if current == THEME_DARK else THEME_DARK
+        set_theme_mode(next_mode)
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(build_stylesheet() + build_modern_widget_stylesheet())
+            install_combobox_popup_fix(app)
+            # Reapply any widget-specific styles that windows expose via apply_styles()
+            try:
+                for w in app.topLevelWidgets():
+                    apply_fn = getattr(w, "apply_styles", None)
+                    if callable(apply_fn):
+                        apply_fn()
+            except Exception:
+                pass
+        self.update_theme_toggle_button_text()
 
     def create_sidebar_toggle_button(self) -> None:
         if self.central_container is None:
@@ -2410,15 +2457,87 @@ class PosMainWindow(QMainWindow):
 
 
 def build_stylesheet() -> str:
+    active = get_theme_mode()
+    if active == THEME_DARK:
+        text_dark = "#E5E7EB"
+        text_muted = "#94A3B8"
+        border = "#334155"
+        panel_bg = "#111827"
+        window_bg = "#0F172A"
+        sidebar_bg = "#111827"
+        sidebar_hover_bg = "#1E2937"
+        sidebar_active_bg = "rgba(37, 99, 235, 0.22)"
+        product_card_bg = "#111827"
+        product_card_hover_bg = "#1D2937"
+        product_card_out_of_stock_bg = "#111827"
+        product_image_placeholder_bg = "#0F172A"
+        product_image_placeholder_border = "#334155"
+        dashboard_card_bg = "#111827"
+        input_bg = "#111827"
+        input_border = "#334155"
+        table_bg = "#111827"
+        table_alt_bg = "#0F172A"
+        table_header_bg = "#111827"
+        table_item_border = "#1F2937"
+        scrollbar_bg = "#0F172A"
+        scrollbar_handle = "#4B5563"
+        scrollbar_handle_hover = "#6B7280"
+        keypad_bg = "#111827"
+        keypad_hover_bg = "#1E2937"
+        keypad_pressed_bg = "#111827"
+        action_neutral_bg = "#1F2937"
+        action_neutral_color = "#E5E7EB"
+        payment_dialog_panel_bg = "#111827"
+        payment_qr_panel_bg = "#0F172A"
+        payment_qr_preview_bg = "#111827"
+        table_delete_hover_bg = "#1F2937"
+        neutral_dialog_bg = "#1F2937"
+        neutral_dialog_color = "#E5E7EB"
+    else:
+        text_dark = TEXT_DARK
+        text_muted = TEXT_MUTED
+        border = BORDER
+        panel_bg = PANEL_BG
+        window_bg = WINDOW_BG
+        sidebar_bg = "#FFFFFF"
+        sidebar_hover_bg = "#F3F7FD"
+        sidebar_active_bg = "rgba(37, 99, 235, 0.12)"
+        product_card_bg = "#FFFFFF"
+        product_card_hover_bg = "#F8FBFF"
+        product_card_out_of_stock_bg = "#F8FAFC"
+        product_image_placeholder_bg = "#F8FAFC"
+        product_image_placeholder_border = BORDER
+        dashboard_card_bg = "#FFFFFF"
+        input_bg = "#FFFFFF"
+        input_border = BORDER
+        table_bg = "#FFFFFF"
+        table_alt_bg = "#FAFBFD"
+        table_header_bg = PANEL_BG
+        table_item_border = "#EFF3F7"
+        scrollbar_bg = "#F3F7FD"
+        scrollbar_handle = "#C1CDDA"
+        scrollbar_handle_hover = "#9AA8B8"
+        keypad_bg = "#FFFFFF"
+        keypad_hover_bg = "#F7FAFD"
+        keypad_pressed_bg = "#EAF4FE"
+        action_neutral_bg = "#E0E0E0"
+        action_neutral_color = TEXT_DARK
+        payment_dialog_panel_bg = "#FFFFFF"
+        payment_qr_panel_bg = "#F8FAFC"
+        payment_qr_preview_bg = "#FFFFFF"
+        table_delete_hover_bg = "#FEF2F2"
+        neutral_dialog_bg = "#E5E7EB"
+        neutral_dialog_color = TEXT_DARK
+
     return f"""
     * {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-family: "Segoe UI";
         font-size: 13px;
     }}
 
     QMainWindow, QWidget {{
-        background: {WINDOW_BG};
+        background: {window_bg};
     }}
 
     QLabel {{
@@ -2426,24 +2545,24 @@ def build_stylesheet() -> str:
     }}
 
     QStatusBar {{
-        background: #FFFFFF;
-        border-top: 1px solid {BORDER};
-        color: {TEXT_MUTED};
+        background: {panel_bg};
+        border-top: 1px solid {border};
+        color: {text_muted};
     }}
 
     #sidebar {{
-        background: #FFFFFF;
-        border-right: 1px solid {BORDER};
+        background: {sidebar_bg};
+        border-right: 1px solid {border};
     }}
 
     #appTitle {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 22px;
         font-weight: 700;
     }}
 
     #appSubtitle, #sidebarFooter {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
     }}
 
@@ -2452,8 +2571,8 @@ def build_stylesheet() -> str:
     }}
 
     #sidebarToggleButton {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {sidebar_bg};
+        border: 1px solid {border};
         border-radius: 13px;
         min-height: 48px;
         max-height: 48px;
@@ -2463,7 +2582,7 @@ def build_stylesheet() -> str:
     }}
 
     #sidebarToggleButton:hover {{
-        background: #F3F7FD;
+        background: {sidebar_hover_bg};
         border-color: rgba(37, 99, 235, 0.35);
     }}
 
@@ -2473,7 +2592,7 @@ def build_stylesheet() -> str:
     }}
 
     #cashierInfo {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 13px;
         font-weight: 600;
     }}
@@ -2489,11 +2608,11 @@ def build_stylesheet() -> str:
     }}
 
     SidebarButton:hover {{
-        background: #F3F7FD;
+        background: {sidebar_hover_bg};
     }}
 
     SidebarButton[active="true"] {{
-        background: rgba(37, 99, 235, 0.12);
+        background: {sidebar_active_bg};
         border-color: rgba(37, 99, 235, 0.24);
         color: {ACCENT_BLUE};
     }}
@@ -2528,62 +2647,62 @@ def build_stylesheet() -> str:
     }}
 
     #cardPanel, #checkoutPanel {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {panel_bg};
+        border: 1px solid {border};
         border-radius: 10px;
     }}
 
     #panelTitle {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 20px;
         font-weight: 800;
     }}
 
     #panelSubtitle {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
         font-weight: 600;
     }}
 
     #productCard {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {product_card_bg};
+        border: 1px solid {border};
         border-radius: 10px;
     }}
 
     #productCard:hover {{
         border-color: {ACCENT_BLUE};
-        background: #F8FBFF;
+        background: {product_card_hover_bg};
     }}
 
     #productCard[outOfStock="true"] {{
-        background: #F8FAFC;
+        background: {product_card_out_of_stock_bg};
         border-color: #CBD5E1;
     }}
 
     #productImagePlaceholder {{
-        background: #F8FAFC;
-        border: 1px solid {BORDER};
+        background: {product_image_placeholder_bg};
+        border: 1px solid {product_image_placeholder_border};
         border-radius: 10px;
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
         font-weight: 700;
     }}
 
     #productName {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 13px;
         font-weight: 800;
     }}
 
     #productBarcode {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 11px;
         font-weight: 600;
     }}
 
     #productPrice {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 16px;
         font-weight: 800;
     }}
@@ -2601,25 +2720,25 @@ def build_stylesheet() -> str:
     }}
 
     #dashboardCard {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {dashboard_card_bg};
+        border: 1px solid {border};
         border-radius: 10px;
     }}
 
     #dashboardCardTitle {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
         font-weight: 700;
     }}
 
     #dashboardCardValue {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 26px;
         font-weight: 800;
     }}
 
     #dashboardCardSubtitle {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
     }}
 
@@ -2641,8 +2760,8 @@ def build_stylesheet() -> str:
     }}
 
     QLineEdit {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {input_bg};
+        border: 1px solid {input_border};
         border-radius: 8px;
         padding: 10px 12px;
         selection-background-color: {ACCENT_BLUE};
@@ -2654,45 +2773,45 @@ def build_stylesheet() -> str:
     }}
 
     QTableWidget {{
-        alternate-background-color: #FAFBFD;
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        alternate-background-color: {table_alt_bg};
+        background: {table_bg};
+        border: 1px solid {border};
         border-radius: 12px;
         gridline-color: transparent;
         selection-background-color: rgba(37, 99, 235, 0.16);
-        selection-color: {TEXT_DARK};
+        selection-color: {text_dark};
     }}
 
     QHeaderView::section {{
-        background: {PANEL_BG};
+        background: {table_header_bg};
         border: none;
-        border-bottom: 1px solid {BORDER};
-        color: {TEXT_DARK};
+        border-bottom: 1px solid {border};
+        color: {text_dark};
         font-weight: 700;
         padding: 12px 10px;
     }}
 
     QTableWidget::item {{
-        border-bottom: 1px solid #EFF3F7;
+        border-bottom: 1px solid {table_item_border};
         padding: 8px 10px;
     }}
 
     QScrollBar:vertical {{
-        background: #F3F7FD;
+        background: {scrollbar_bg};
         border: none;
-        border-left: 1px solid {BORDER};
+        border-left: 1px solid {border};
         width: 12px;
         margin: 0;
     }}
 
     QScrollBar::handle:vertical {{
-        background: #C1CDDA;
+        background: {scrollbar_handle};
         border-radius: 5px;
         min-height: 32px;
     }}
 
     QScrollBar::handle:vertical:hover {{
-        background: #9AA8B8;
+        background: {scrollbar_handle_hover};
     }}
 
     QScrollBar::add-line:vertical,
@@ -2707,37 +2826,37 @@ def build_stylesheet() -> str:
     }}
 
     #statusHint {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
     }}
 
     #totalBlock {{
-        background: {PANEL_BG};
-        border: 1px solid {BORDER};
+        background: {panel_bg};
+        border: 1px solid {border};
         border-radius: 10px;
     }}
 
     #sectionLabel {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
         font-weight: 700;
         text-transform: uppercase;
     }}
 
     #totalValue {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 34px;
         font-weight: 800;
     }}
 
     #amountLabel {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 13px;
         font-weight: 700;
     }}
 
     #amountValue {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 15px;
         font-weight: 800;
     }}
@@ -2748,20 +2867,20 @@ def build_stylesheet() -> str:
     }}
 
     KeypadButton {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {keypad_bg};
+        border: 1px solid {border};
         border-radius: 8px;
         font-size: 15px;
         font-weight: 700;
     }}
 
     KeypadButton:hover {{
-        background: #F7FAFD;
-        border-color: #C1CDDA;
+        background: {keypad_hover_bg};
+        border-color: {border};
     }}
 
     KeypadButton:pressed {{
-        background: #EAF4FE;
+        background: {keypad_pressed_bg};
         border-color: {ACCENT_BLUE};
     }}
 
@@ -2784,8 +2903,8 @@ def build_stylesheet() -> str:
     }}
 
     ActionButton[role="neutral"] {{
-        background: #E0E0E0;
-        color: {TEXT_DARK};
+        background: {action_neutral_bg};
+        color: {action_neutral_color};
     }}
 
     #payButton {{
@@ -2809,44 +2928,44 @@ def build_stylesheet() -> str:
     }}
 
     #tableDeleteIconButton:hover {{
-        background: #FEF2F2;
+        background: {table_delete_hover_bg};
         border-radius: 14px;
         color: #B91C1C;
     }}
 
     #dialogTotalLabel {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 16px;
         font-weight: 700;
     }}
 
     #paymentDialogPanel {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {payment_dialog_panel_bg};
+        border: 1px solid {border};
         border-radius: 14px;
     }}
 
     #paymentDialogTitle {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 22px;
         font-weight: 800;
     }}
 
     #paymentDialogSubtitle {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
         font-weight: 600;
     }}
 
     #paymentFieldLabel {{
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
         font-weight: 800;
         text-transform: uppercase;
     }}
 
     #paymentGrandTotal {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 32px;
         font-weight: 800;
     }}
@@ -2864,29 +2983,29 @@ def build_stylesheet() -> str:
     }}
 
     #paymentQrPanel {{
-        background: #F8FAFC;
-        border: 1px dashed {BORDER};
+        background: {payment_qr_panel_bg};
+        border: 1px dashed {border};
         border-radius: 12px;
     }}
 
     #paymentQrPreview {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {payment_qr_preview_bg};
+        border: 1px solid {border};
         border-radius: 10px;
-        color: {TEXT_MUTED};
+        color: {text_muted};
         font-size: 12px;
         font-weight: 700;
     }}
 
     #paymentQrDetails {{
-        color: {TEXT_DARK};
+        color: {text_dark};
         font-size: 12px;
         font-weight: 700;
     }}
 
     QRadioButton {{
-        background: #FFFFFF;
-        border: 1px solid {BORDER};
+        background: {input_bg};
+        border: 1px solid {border};
         border-radius: 10px;
         font-weight: 700;
         padding: 14px;
@@ -2908,10 +3027,10 @@ def build_stylesheet() -> str:
     }}
 
     #neutralDialogButton {{
-        background: #E5E7EB;
+        background: {neutral_dialog_bg};
         border: none;
         border-radius: 8px;
-        color: {TEXT_DARK};
+        color: {neutral_dialog_color};
         font-weight: 700;
         min-width: 120px;
         padding: 11px 18px;
@@ -2921,6 +3040,6 @@ def build_stylesheet() -> str:
 
 def configure_app_font(app) -> None:
     app.setStyle("Fusion")
-    app.setStyleSheet(build_stylesheet() + MODERN_WIDGET_STYLESHEET)
+    app.setStyleSheet(build_stylesheet() + build_modern_widget_stylesheet())
     install_combobox_popup_fix(app)
     app.setFont(QFont("Segoe UI", 10))

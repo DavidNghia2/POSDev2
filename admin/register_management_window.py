@@ -24,7 +24,7 @@ from login import (
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
 from ui.notifications import friendly_error
-from ui.theme import MODERN_WIDGET_STYLESHEET
+from ui.theme import build_modern_widget_stylesheet, THEME_DARK, THEME_LIGHT, get_theme_mode
 
 
 class RegisterManagementWindow(QWidget):
@@ -300,8 +300,111 @@ class RegisterManagementWindow(QWidget):
         self.name_input.setFocus()
 
     def apply_styles(self) -> None:
-        self.setStyleSheet(
+        mode = get_theme_mode()
+        if mode == THEME_DARK:
+            styles = """
+            QWidget {
+                background: #0F172A;
+                color: #E5E7EB;
+                font-family: "Segoe UI";
+                font-size: 13px;
+            }
+
+            #titleLabel {
+                color: #F3F4F6;
+                font-size: 26px;
+                font-weight: 700;
+            }
+
+            #subtitleLabel {
+                color: #D1D5DB;
+                font-size: 13px;
+            }
+
+            #sectionLabel {
+                color: #E5E7EB;
+                font-size: 15px;
+                font-weight: 700;
+            }
+
+            #panel {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 10px;
+            }
+
+            #formLabel {
+                color: #D1D5DB;
+                font-size: 12px;
+                font-weight: 600;
+            }
+
+            QLineEdit {
+                background: #1E293B;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                padding: 10px 12px;
+                color: #E5E7EB;
+            }
+
+            QLineEdit:focus {
+                border: 1px solid #3B82F6;
+            }
+
+            QPushButton {
+                border: none;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-weight: 700;
+                padding: 12px 14px;
+            }
+
+            #primaryButton {
+                background: #3B82F6;
+            }
+
+            #secondaryButton {
+                background: #059669;
+            }
+
+            #dangerButton {
+                background: #EF4444;
+            }
+            
+            #neutralButton {
+                background: #475569;
+            }
+
+            QPushButton:pressed {
+                padding-top: 13px;
+                padding-bottom: 11px;
+            }
+
+            QTableWidget {
+                background: #111827;
+                border: 1px solid #334155;
+                border-radius: 8px;
+                alternate-background-color: #0F172A;
+                gridline-color: transparent;
+                color: #E5E7EB;
+            }
+
+            QHeaderView::section {
+                background: #1E293B;
+                border: none;
+                border-bottom: 1px solid #334155;
+                color: #E5E7EB;
+                font-weight: 700;
+                padding: 10px;
+            }
+
+            QTableWidget::item {
+                border-bottom: 1px solid #1E293B;
+                padding: 8px;
+            }
             """
+        else:
+            styles = """
             QWidget {
                 background: #EEF1F4;
                 color: #1F2933;
@@ -399,8 +502,8 @@ class RegisterManagementWindow(QWidget):
                 border-bottom: 1px solid #EDF1F5;
                 padding: 8px;
             }
-            """ + MODERN_WIDGET_STYLESHEET
-        )
+            """
+        self.setStyleSheet(styles + build_modern_widget_stylesheet())
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
