@@ -1,11 +1,15 @@
+import secrets
 import sqlite3
 from pathlib import Path
 
 from PyQt6.QtCore import QAbstractTableModel, QEvent, QModelIndex, QRect, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QDoubleValidator, QPainter, QPixmap
+from PyQt6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFormLayout,
@@ -16,8 +20,10 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QRadioButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QStyle,
     QStyledItemDelegate,
     QTableView,
@@ -27,6 +33,16 @@ from PyQt6.QtWidgets import (
 
 from database import db
 from login import get_setting
+from product_management.label_printing import (
+    DEFAULT_STICKER_SIZE,
+    LABEL_MODE_BARCODE,
+    LABEL_MODE_PRICE,
+    STICKER_SIZES,
+    can_encode_code128,
+    configure_sticker_printer,
+    render_product_labels,
+    sticker_size_options,
+)
 from ui.currency import DEFAULT_CURRENCY_SYMBOL, format_money, get_currency_symbol_from_settings
 from ui.dialogs import confirm_delete
 from ui.icon_manager import IconManager
@@ -37,86 +53,125 @@ from ui.thumbnail_cache import ThumbnailCache
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PRODUCT_TABLE_PAGE_SIZE = 250
+ACTION_ICON_BUTTON_SIZE = 32
+ACTION_ICON_BUTTON_GAP = 7
+ACTION_COLUMN_WIDTH = 124
 
 def build_product_management_stylesheet(mode: str | None = None) -> str:
     active = mode or get_theme_mode()
     if active == THEME_DARK:
         colors = {
-            "window_bg": "#101820",
-            "text": "#E6EDF3",
-            "dialog_bg": "#101820",
-            "title": "#F5F8FA",
-            "subtitle": "#C8D3DF",
-            "section": "#E6EDF3",
-            "helper_bg": "#203B5F",
-            "helper_border": "#274B7A",
-            "helper_text": "#BFDBFE",
-            "panel_bg": "#17212B",
-            "panel_border": "#314154",
-            "dialog_body_bg": "#17212B",
-            "image_bg": "#101820",
-            "image_border": "#314154",
-            "image_text": "#A7B3C2",
-            "barcode_row_bg": "#1F2A37",
-            "barcode_row_border": "#314154",
-            "barcode_value": "#E6EDF3",
-            "barcode_variant_bg": "#274B7A",
-            "barcode_variant_border": "#2563EB",
+            "window_bg": "#0F1520",
+            "text": "#E2E8F0",
+            "dialog_bg": "#0F1520",
+            "title": "#F1F5F9",
+            "subtitle": "#94A3B8",
+            "section": "#CBD5E1",
+            "helper_bg": "#1E3A5F",
+            "helper_border": "#2563EB",
+            "helper_text": "#93C5FD",
+            "panel_bg": "#161D2E",
+            "panel_border": "#2D3F5A",
+            "dialog_body_bg": "#161D2E",
+            "image_bg": "#0F1520",
+            "image_border": "#2D3F5A",
+            "image_text": "#94A3B8",
+            "barcode_row_bg": "#1A2332",
+            "barcode_row_border": "#2D3F5A",
+            "barcode_value": "#E2E8F0",
+            "barcode_variant_bg": "#1E3A8A",
+            "barcode_variant_border": "#3B82F6",
             "barcode_variant_text": "#BFDBFE",
-            "empty_text": "#A7B3C2",
-            "input_bg": "#1F2A37",
-            "input_border": "#314154",
-            "input_focus": "#60A5FA",
-            "neutral_button": "#46586A",
-            "barcode_delete_bg": "#3F1D24",
+            "empty_text": "#64748B",
+            "input_bg": "#1A2332",
+            "input_border": "#2D3F5A",
+            "input_focus": "#3B82F6",
+            "neutral_button": "#334155",
+            "barcode_delete_bg": "#3B1D24",
             "barcode_delete_text": "#FCA5A5",
-            "table_bg": "#17212B",
-            "table_alt": "#101820",
-            "table_border": "#314154",
-            "table_selection_bg": "#274B7A",
-            "table_selection_text": "#E6EDF3",
-            "table_header_bg": "#1F2A37",
-            "table_header_text": "#E6EDF3",
-            "table_item_border": "#1F2A37",
+            "table_bg": "#161D2E",
+            "table_alt": "#0F1520",
+            "table_border": "#2D3F5A",
+            "table_selection_bg": "#1E3A8A",
+            "table_selection_text": "#F1F5F9",
+            "table_header_bg": "#1A2332",
+            "table_header_text": "#CBD5E1",
+            "table_item_border": "#1F2937",
+            "table_hover": "#1E2D40",
+            "print_hero_bg": "#1B2640",
+            "print_hero_border": "#2D3F5A",
+            "print_hero_accent": "#3B82F6",
+            "print_hero_title": "#F1F5F9",
+            "print_hero_text": "#94A3B8",
+            "print_badge_bg": "#1E3A8A",
+            "print_badge_text": "#93C5FD",
+            "print_card_bg": "#1A2332",
+            "print_card_border": "#2D3F5A",
+            "print_card_title": "#CBD5E1",
+            "print_card_text": "#94A3B8",
+            "print_preview_bg": "#0F1520",
+            "print_preview_border": "#334155",
+            "print_preview_title": "#F1F5F9",
+            "print_preview_text": "#94A3B8",
+            "toolbar_bg": "#161D2E",
+            "toolbar_border": "#2D3F5A",
         }
     else:
         colors = {
-            "window_bg": "#EEF1F4",
-            "text": "#1F2933",
-            "dialog_bg": "#EEF1F4",
-            "title": "#17212B",
-            "subtitle": "#64707D",
-            "section": "#25313D",
-            "helper_bg": "#F0F7FF",
-            "helper_border": "#CFE3FF",
-            "helper_text": "#32506D",
+            "window_bg": "#F1F5F9",
+            "text": "#1E293B",
+            "dialog_bg": "#F1F5F9",
+            "title": "#0F172A",
+            "subtitle": "#64748B",
+            "section": "#334155",
+            "helper_bg": "#EFF6FF",
+            "helper_border": "#BFDBFE",
+            "helper_text": "#1D4ED8",
             "panel_bg": "#FFFFFF",
-            "panel_border": "#D8E0E8",
+            "panel_border": "#E2E8F0",
             "dialog_body_bg": "#FFFFFF",
             "image_bg": "#F8FAFC",
-            "image_border": "#D8E0E8",
-            "image_text": "#64707D",
-            "barcode_row_bg": "#FFFFFF",
-            "barcode_row_border": "#E5EAF0",
-            "barcode_value": "#25313D",
-            "barcode_variant_bg": "#EAF4FE",
-            "barcode_variant_border": "#CFE3FF",
-            "barcode_variant_text": "#2563EB",
-            "empty_text": "#7B8794",
+            "image_border": "#E2E8F0",
+            "image_text": "#94A3B8",
+            "barcode_row_bg": "#F8FAFC",
+            "barcode_row_border": "#E2E8F0",
+            "barcode_value": "#1E293B",
+            "barcode_variant_bg": "#EFF6FF",
+            "barcode_variant_border": "#93C5FD",
+            "barcode_variant_text": "#1D4ED8",
+            "empty_text": "#94A3B8",
             "input_bg": "#FFFFFF",
-            "input_border": "#C9D3DE",
-            "input_focus": "#2563EB",
-            "neutral_button": "#708195",
-            "barcode_delete_bg": "#FEE2E2",
-            "barcode_delete_text": "#B91C1C",
+            "input_border": "#CBD5E1",
+            "input_focus": "#3B82F6",
+            "neutral_button": "#64748B",
+            "barcode_delete_bg": "#FEF2F2",
+            "barcode_delete_text": "#DC2626",
             "table_bg": "#FFFFFF",
-            "table_alt": "#F7F9FB",
-            "table_border": "#D8E0E8",
+            "table_alt": "#F8FAFC",
+            "table_border": "#E2E8F0",
             "table_selection_bg": "#DBEAFE",
-            "table_selection_text": "#17212B",
-            "table_header_bg": "#F0F4F8",
-            "table_header_text": "#25313D",
-            "table_item_border": "#EDF1F5",
+            "table_selection_text": "#0F172A",
+            "table_header_bg": "#F1F5F9",
+            "table_header_text": "#334155",
+            "table_item_border": "#F1F5F9",
+            "table_hover": "#F0F6FF",
+            "print_hero_bg": "#EFF6FF",
+            "print_hero_border": "#BFDBFE",
+            "print_hero_accent": "#3B82F6",
+            "print_hero_title": "#0F172A",
+            "print_hero_text": "#64748B",
+            "print_badge_bg": "#EFF6FF",
+            "print_badge_text": "#1D4ED8",
+            "print_card_bg": "#F8FAFC",
+            "print_card_border": "#E2E8F0",
+            "print_card_title": "#334155",
+            "print_card_text": "#94A3B8",
+            "print_preview_bg": "#F8FAFC",
+            "print_preview_border": "#CBD5E1",
+            "print_preview_title": "#0F172A",
+            "print_preview_text": "#94A3B8",
+            "toolbar_bg": "#FFFFFF",
+            "toolbar_border": "#E2E8F0",
         }
 
     return f"""
@@ -133,13 +188,13 @@ QDialog {{
 
 #titleLabel {{
     color: {colors["title"]};
-    font-size: 26px;
+    font-size: 24px;
     font-weight: 700;
 }}
 
 #dialogTitleLabel {{
     color: {colors["title"]};
-    font-size: 22px;
+    font-size: 20px;
     font-weight: 700;
 }}
 
@@ -150,13 +205,13 @@ QDialog {{
 
 #sectionLabel {{
     color: {colors["section"]};
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 700;
 }}
 
 #fieldSectionLabel {{
     color: {colors["section"]};
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 700;
 }}
 
@@ -173,7 +228,13 @@ QDialog {{
 #panel, #dialogPanel {{
     background: {colors["panel_bg"]};
     border: 1px solid {colors["panel_border"]};
-    border-radius: 10px;
+    border-radius: 14px;
+}}
+
+#toolbarWidget {{
+    background: {colors["toolbar_bg"]};
+    border: 1px solid {colors["toolbar_border"]};
+    border-radius: 12px;
 }}
 
 #dialogScroll, #dialogBody {{
@@ -226,7 +287,7 @@ QLabel {{
     padding: 20px;
 }}
 
-QLineEdit {{
+QLineEdit, QSpinBox {{
     background: {colors["input_bg"]};
     border: 1px solid {colors["input_border"]};
     border-radius: 8px;
@@ -237,7 +298,7 @@ QLineEdit {{
     selection-color: #FFFFFF;
 }}
 
-QLineEdit:focus {{
+QLineEdit:focus, QSpinBox:focus {{
     border: 1px solid {colors["input_focus"]};
 }}
 
@@ -257,26 +318,56 @@ QPushButton {{
     padding: 0 14px;
 }}
 
+QPushButton:hover {{
+    filter: brightness(1.08);
+}}
+
+QPushButton:pressed {{
+    padding-top: 13px;
+    padding-bottom: 11px;
+    filter: brightness(0.95);
+}}
+
 #primaryButton, #rowEditButton {{
     background: #2563EB;
+}}
+
+#primaryButton:hover, #rowEditButton:hover {{
+    background: #1D4ED8;
 }}
 
 #secondaryButton {{
     background: #0F766E;
 }}
 
+#secondaryButton:hover {{
+    background: #0D5F59;
+}}
+
 #dangerButton, #rowDeleteButton {{
     background: #DC2626;
+}}
+
+#dangerButton:hover, #rowDeleteButton:hover {{
+    background: #B91C1C;
 }}
 
 #neutralButton {{
     background: {colors["neutral_button"]};
 }}
 
+#neutralButton:hover {{
+    background: #475569;
+}}
+
 #smallButton {{
     background: #2563EB;
     min-width: 104px;
     padding: 0 12px;
+}}
+
+#smallButton:hover {{
+    background: #1D4ED8;
 }}
 
 #barcodeDeleteButton {{
@@ -286,20 +377,20 @@ QPushButton {{
     padding: 0;
 }}
 
+#barcodeDeleteButton:hover {{
+    background: #DC2626;
+    color: #FFFFFF;
+}}
+
 #rowEditButton, #rowDeleteButton {{
     min-height: 32px;
     padding: 0 10px;
 }}
 
-QPushButton:pressed {{
-    padding-top: 13px;
-    padding-bottom: 11px;
-}}
-
 QTableView {{
     background: {colors["table_bg"]};
     border: 1px solid {colors["table_border"]};
-    border-radius: 8px;
+    border-radius: 10px;
     alternate-background-color: {colors["table_alt"]};
     gridline-color: transparent;
     color: {colors["text"]};
@@ -313,7 +404,7 @@ QHeaderView::section {{
     border-bottom: 1px solid {colors["table_border"]};
     color: {colors["table_header_text"]};
     font-weight: 700;
-    padding: 10px;
+    padding: 12px 10px;
 }}
 
 QTableView::item {{
@@ -325,6 +416,116 @@ QTableView::item {{
 QTableView::item:selected {{
     background: {colors["table_selection_bg"]};
     color: {colors["table_selection_text"]};
+}}
+
+QTableView::item:hover {{
+    background: {colors["table_hover"]};
+}}
+
+#printHero {{
+    background: {colors["print_hero_bg"]};
+    border: 1px solid {colors["print_hero_border"]};
+    border-left: 4px solid {colors["print_hero_accent"]};
+    border-radius: 14px;
+}}
+
+#printProductName {{
+    color: {colors["print_hero_title"]};
+    font-size: 18px;
+    font-weight: 800;
+}}
+
+#printProductMeta {{
+    color: {colors["print_hero_text"]};
+    font-size: 12px;
+    font-weight: 500;
+}}
+
+#printPriceBadge {{
+    background: {colors["print_badge_bg"]};
+    border: 1px solid {colors["print_hero_border"]};
+    border-radius: 10px;
+    color: {colors["print_badge_text"]};
+    font-size: 16px;
+    font-weight: 900;
+    padding: 6px 14px;
+}}
+
+#printOptionCard {{
+    background: {colors["print_card_bg"]};
+    border: 1px solid {colors["print_card_border"]};
+    border-radius: 12px;
+}}
+
+#printSectionTitle {{
+    color: {colors["print_card_title"]};
+    font-size: 13px;
+    font-weight: 800;
+}}
+
+#printSectionHint {{
+    color: {colors["print_card_text"]};
+    font-size: 12px;
+    font-weight: 500;
+}}
+
+#printPreviewCard {{
+    background: {colors["print_preview_bg"]};
+    border: 1px solid {colors["print_preview_border"]};
+    border-radius: 12px;
+}}
+
+#printPreviewTitle {{
+    color: {colors["print_preview_title"]};
+    font-size: 12px;
+    font-weight: 800;
+}}
+
+#printPreviewBody {{
+    color: {colors["print_preview_text"]};
+    font-size: 11px;
+    font-weight: 500;
+}}
+
+QLabel#printFormLabel {{
+    color: {colors["section"]};
+    font-size: 12px;
+    font-weight: 700;
+}}
+
+QComboBox, QSpinBox {{
+    min-height: 26px;
+}}
+
+QSpinBox::up-button, QSpinBox::down-button {{
+    border: none;
+    width: 20px;
+}}
+
+QSpinBox::up-arrow, QSpinBox::down-arrow {{
+    width: 0;
+    height: 0;
+}}
+
+QPushButton#printWideButton {{
+    min-height: 38px;
+}}
+
+QRadioButton {{
+    background: {colors["panel_bg"]};
+    border: 1px solid {colors["panel_border"]};
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: 600;
+}}
+
+QRadioButton:hover {{
+    border-color: {colors["input_focus"]};
+}}
+
+QRadioButton:checked {{
+    background: {colors["helper_bg"]};
+    border: 1px solid {colors["input_focus"]};
 }}
 """ + build_modern_widget_stylesheet(active)
 
@@ -419,11 +620,16 @@ class ProductTableModel(QAbstractTableModel):
             }
             return values.get(column, "")
 
-        if role == Qt.ItemDataRole.ToolTipRole and column == 8:
+        if role == Qt.ItemDataRole.ToolTipRole:
             sync_error = str(product.get("sync_error") or "")
-            if sync_error:
-                return friendly_error(sync_error)
-            return str(product.get("sync_status") or "")
+            sync_status = str(product.get("sync_status") or "")
+            if column == 8:
+                if sync_error:
+                    return friendly_error(sync_error)
+                return sync_status
+            if column == 9:
+                retry_hint = "Retry sync available" if sync_status == "pending" or sync_error else "Retry disabled"
+                return f"Edit product | {retry_hint} | Delete product"
 
         if role == Qt.ItemDataRole.ForegroundRole and column == 8:
             sync_error = str(product.get("sync_error") or "")
@@ -444,7 +650,7 @@ class ProductTableModel(QAbstractTableModel):
             if column == 1:
                 return QSize(70, 54)
             if column == 9:
-                return QSize(245, 54)
+                return QSize(ACTION_COLUMN_WIDTH, 54)
 
         return None
 
@@ -488,15 +694,19 @@ class ProductActionsDelegate(QStyledItemDelegate):
 
     def paint(self, painter: QPainter, option, index: QModelIndex) -> None:
         if option.state & QStyle.StateFlag.State_Selected:
-            painter.fillRect(option.rect, QColor("#DBEAFE"))
+            selection_color = "#274B7A" if get_theme_mode() == THEME_DARK else "#DBEAFE"
+            painter.fillRect(option.rect, QColor(selection_color))
 
         model = index.model()
         edit_rect, retry_rect, delete_rect = self.action_rects(option.rect)
         sync_status, sync_error = model.product_sync_status_at(index.row())
-        self.draw_action_button(painter, edit_rect, "Edit", "#2563EB")
-        retry_color = "#F59E0B" if sync_status == "pending" or sync_error else "#A7B3C2"
-        self.draw_action_button(painter, retry_rect, "Retry", retry_color)
-        self.draw_action_button(painter, delete_rect, "Delete", "#DC2626")
+        retry_enabled = sync_status == "pending" or bool(sync_error)
+        retry_color = "#F59E0B" if retry_enabled else self.inactive_button_color()
+        retry_icon_color = "#FFFFFF" if retry_enabled else self.inactive_icon_color()
+
+        self.draw_action_button(painter, edit_rect, "edit", "#2563EB")
+        self.draw_action_button(painter, retry_rect, "refresh", retry_color, retry_icon_color)
+        self.draw_action_button(painter, delete_rect, "delete", "#DC2626")
 
     def editorEvent(self, event, model, option, index: QModelIndex) -> bool:
         if event.type() != QEvent.Type.MouseButtonRelease:
@@ -522,28 +732,45 @@ class ProductActionsDelegate(QStyledItemDelegate):
         return False
 
     def action_rects(self, cell_rect: QRect) -> tuple[QRect, QRect, QRect]:
-        button_height = 32
-        edit_width = 68
-        retry_width = 70
-        delete_width = 78
-        gap = 8
-        total_width = edit_width + gap + retry_width + gap + delete_width
+        button_size = ACTION_ICON_BUTTON_SIZE
+        gap = ACTION_ICON_BUTTON_GAP
+        total_width = (button_size * 3) + (gap * 2)
         left = cell_rect.left() + max((cell_rect.width() - total_width) // 2, 6)
-        top = cell_rect.top() + max((cell_rect.height() - button_height) // 2, 4)
-        edit_rect = QRect(left, top, edit_width, button_height)
-        retry_rect = QRect(left + edit_width + gap, top, retry_width, button_height)
-        delete_rect = QRect(left + edit_width + gap + retry_width + gap, top, delete_width, button_height)
+        top = cell_rect.top() + max((cell_rect.height() - button_size) // 2, 4)
+        edit_rect = QRect(left, top, button_size, button_size)
+        retry_rect = QRect(left + button_size + gap, top, button_size, button_size)
+        delete_rect = QRect(left + ((button_size + gap) * 2), top, button_size, button_size)
         return edit_rect, retry_rect, delete_rect
 
-    def draw_action_button(self, painter: QPainter, rect: QRect, text: str, color: str) -> None:
+    def draw_action_button(
+        self,
+        painter: QPainter,
+        rect: QRect,
+        icon_key: str,
+        background_color: str,
+        icon_color: str = "#FFFFFF",
+    ) -> None:
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(color))
-        painter.drawRoundedRect(rect, 7, 7)
-        painter.setPen(QColor("#FFFFFF"))
-        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.setBrush(QColor(background_color))
+        painter.drawRoundedRect(rect, 8, 8)
+
+        icon_size = 17
+        icon_rect = QRect(
+            rect.center().x() - (icon_size // 2),
+            rect.center().y() - (icon_size // 2),
+            icon_size,
+            icon_size,
+        )
+        painter.drawPixmap(icon_rect, IconManager.pixmap(icon_key, icon_size, icon_color))
         painter.restore()
+
+    def inactive_button_color(self) -> str:
+        return "#314154" if get_theme_mode() == THEME_DARK else "#E2E8F0"
+
+    def inactive_icon_color(self) -> str:
+        return "#A7B3C2" if get_theme_mode() == THEME_DARK else "#64748B"
 
 
 class ProductDialog(QDialog):
@@ -570,7 +797,7 @@ class ProductDialog(QDialog):
 
     def create_ui(self) -> None:
         root_layout = QVBoxLayout(self)
-        root_layout.setContentsMargins(18, 18, 18, 18)
+        root_layout.setContentsMargins(20, 20, 20, 20)
         root_layout.setSpacing(14)
 
         dialog_panel = QFrame()
@@ -591,7 +818,7 @@ class ProductDialog(QDialog):
         dialog_scroll.setWidget(dialog_body)
 
         layout = QVBoxLayout(dialog_body)
-        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setContentsMargins(22, 20, 22, 18)
         layout.setSpacing(12)
 
         title_text = "Edit Product" if self.product_id is not None else "Add Product"
@@ -649,7 +876,7 @@ class ProductDialog(QDialog):
         barcode_scroll.setObjectName("barcodeScroll")
         barcode_scroll.setWidgetResizable(True)
         barcode_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        barcode_scroll.setFixedHeight(104)
+        barcode_scroll.setFixedHeight(120)
         barcode_scroll.setWidget(self.barcode_list_widget)
         barcode_section.addWidget(barcode_scroll)
         layout.addLayout(barcode_section)
@@ -658,7 +885,7 @@ class ProductDialog(QDialog):
         form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form_layout.setHorizontalSpacing(14)
-        form_layout.setVerticalSpacing(10)
+        form_layout.setVerticalSpacing(12)
         form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form_layout.setContentsMargins(0, 2, 0, 0)
         layout.addLayout(form_layout)
@@ -879,6 +1106,386 @@ class ProductDialog(QDialog):
         QMessageBox.warning(self, "Validation Error", message)
 
 
+class ProductLabelPrintDialog(QDialog):
+    def __init__(
+        self,
+        product: dict,
+        currency_symbol: str,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.product = dict(product)
+        self.currency_symbol = currency_symbol
+        self.product_updated = False
+        self.save_task_runner = BlockingTaskRunner(self, timeout_ms=PRODUCT_SYNC_TIMEOUT_MS)
+
+        self.setWindowTitle("Print Product Label")
+        self.setModal(True)
+        self.resize(560, 460)
+        self.setMinimumWidth(520)
+        self.apply_styles()
+        self.create_ui()
+        self.refresh_barcode_controls()
+        self.update_size_description()
+        self.update_mode_state()
+
+    @property
+    def barcodes(self) -> list[str]:
+        return list(self.product.get("barcodes") or [])
+
+    def apply_styles(self) -> None:
+        self.setStyleSheet(build_product_management_stylesheet())
+
+    def create_ui(self) -> None:
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(20, 20, 20, 20)
+        root_layout.setSpacing(14)
+
+        panel = QFrame()
+        panel.setObjectName("dialogPanel")
+        root_layout.addWidget(panel, 1)
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(22, 20, 22, 18)
+        layout.setSpacing(14)
+
+        title_label = IconManager.label("Print Product Label", "print", "dialogTitleLabel", icon_size=22)
+        layout.addWidget(title_label)
+
+        product_name = str(self.product.get("name") or "Product")
+        price_text = self.current_price_text()
+
+        hero = QFrame()
+        hero.setObjectName("printHero")
+        hero_layout = QHBoxLayout(hero)
+        hero_layout.setContentsMargins(14, 12, 14, 12)
+        hero_layout.setSpacing(12)
+
+        product_info_layout = QVBoxLayout()
+        product_info_layout.setContentsMargins(0, 0, 0, 0)
+        product_info_layout.setSpacing(3)
+
+        product_name_label = QLabel(product_name)
+        product_name_label.setObjectName("printProductName")
+        product_name_label.setWordWrap(True)
+
+        barcode_count = len(self.barcodes)
+        meta_text = f"{barcode_count} barcode{'s' if barcode_count != 1 else ''} available · Ready to print labels"
+        product_meta_label = QLabel(meta_text)
+        product_meta_label.setObjectName("printProductMeta")
+        product_meta_label.setWordWrap(True)
+
+        product_info_layout.addWidget(product_name_label)
+        product_info_layout.addWidget(product_meta_label)
+
+        price_badge = QLabel(price_text)
+        price_badge.setObjectName("printPriceBadge")
+        price_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        price_badge.setMinimumWidth(128)
+
+        hero_layout.addLayout(product_info_layout, 1)
+        hero_layout.addWidget(price_badge, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(hero)
+
+        mode_card = QFrame()
+        mode_card.setObjectName("printOptionCard")
+        mode_card_layout = QVBoxLayout(mode_card)
+        mode_card_layout.setContentsMargins(14, 12, 14, 12)
+        mode_card_layout.setSpacing(8)
+
+        mode_title = QLabel("Choose label type")
+        mode_title.setObjectName("printSectionTitle")
+        mode_hint = QLabel("Print a scannable barcode sticker or a clean shelf price label.")
+        mode_hint.setObjectName("printSectionHint")
+        mode_hint.setWordWrap(True)
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(10)
+        self.barcode_mode_radio = QRadioButton("Barcode")
+        self.price_mode_radio = QRadioButton("Price Label")
+        self.mode_group = QButtonGroup(self)
+        self.mode_group.addButton(self.barcode_mode_radio, 0)
+        self.mode_group.addButton(self.price_mode_radio, 1)
+        self.barcode_mode_radio.setChecked(True)
+        self.barcode_mode_radio.toggled.connect(self.update_mode_state)
+        self.price_mode_radio.toggled.connect(self.update_mode_state)
+        mode_row.addWidget(self.barcode_mode_radio)
+        mode_row.addWidget(self.price_mode_radio)
+        mode_row.addStretch(1)
+
+        mode_card_layout.addWidget(mode_title)
+        mode_card_layout.addWidget(mode_hint)
+        mode_card_layout.addLayout(mode_row)
+        layout.addWidget(mode_card)
+
+        settings_card = QFrame()
+        settings_card.setObjectName("printOptionCard")
+        settings_layout = QVBoxLayout(settings_card)
+        settings_layout.setContentsMargins(14, 12, 14, 12)
+        settings_layout.setSpacing(8)
+
+        settings_title = QLabel("Print settings")
+        settings_title.setObjectName("printSectionTitle")
+        settings_layout.addWidget(settings_title)
+
+        form_layout = QFormLayout()
+        form_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form_layout.setFormAlignment(Qt.AlignmentFlag.AlignTop)
+        form_layout.setHorizontalSpacing(16)
+        form_layout.setVerticalSpacing(12)
+        form_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        settings_layout.addLayout(form_layout)
+
+        self.size_combo = QComboBox()
+        for key, label in sticker_size_options():
+            self.size_combo.addItem(label, key)
+        default_index = self.size_combo.findData(DEFAULT_STICKER_SIZE)
+        if default_index >= 0:
+            self.size_combo.setCurrentIndex(default_index)
+        self.size_combo.currentIndexChanged.connect(self.update_size_description)
+        self.size_combo.currentIndexChanged.connect(self.update_preview_summary)
+
+        self.quantity_spin = QSpinBox()
+        self.quantity_spin.setRange(1, 999)
+        self.quantity_spin.setValue(1)
+        self.quantity_spin.valueChanged.connect(self.update_preview_summary)
+
+        self.barcode_combo = QComboBox()
+        self.barcode_combo.currentIndexChanged.connect(self.update_preview_summary)
+
+        self.generate_barcode_button = QPushButton("Generate Barcode")
+        self.generate_barcode_button.setObjectName("secondaryButton")
+        self.generate_barcode_button.setProperty("class", "printWideButton")
+        IconManager.apply_button(self.generate_barcode_button, "barcode", IconManager.LIGHT)
+        self.generate_barcode_button.clicked.connect(self.generate_barcode)
+
+        self.barcode_field_label = QLabel("Barcode")
+        self.generate_barcode_field_label = QLabel("")
+        for field_label in (self.barcode_field_label, self.generate_barcode_field_label):
+            field_label.setObjectName("printFormLabel")
+
+        size_label = QLabel("Sticker Size")
+        quantity_label = QLabel("Quantity")
+        for field_label in (size_label, quantity_label):
+            field_label.setObjectName("printFormLabel")
+
+        form_layout.addRow(size_label, self.size_combo)
+        form_layout.addRow(quantity_label, self.quantity_spin)
+        form_layout.addRow(self.barcode_field_label, self.barcode_combo)
+        form_layout.addRow(self.generate_barcode_field_label, self.generate_barcode_button)
+
+        self.size_help_label = QLabel("")
+        self.size_help_label.setObjectName("printSectionHint")
+        self.size_help_label.setWordWrap(True)
+        settings_layout.addWidget(self.size_help_label)
+        layout.addWidget(settings_card)
+
+        preview_card = QFrame()
+        preview_card.setObjectName("printPreviewCard")
+        preview_layout = QVBoxLayout(preview_card)
+        preview_layout.setContentsMargins(14, 10, 14, 10)
+        preview_layout.setSpacing(4)
+
+        preview_title = QLabel("Label preview summary")
+        preview_title.setObjectName("printPreviewTitle")
+        self.preview_summary_label = QLabel("")
+        self.preview_summary_label.setObjectName("printPreviewBody")
+        self.preview_summary_label.setWordWrap(True)
+        preview_layout.addWidget(preview_title)
+        preview_layout.addWidget(self.preview_summary_label)
+        layout.addWidget(preview_card)
+
+        layout.addStretch(1)
+
+        button_layout = QHBoxLayout()
+        button_layout.setContentsMargins(0, 2, 0, 0)
+        button_layout.setSpacing(10)
+        button_layout.addStretch(1)
+
+        close_button = QPushButton("Close")
+        close_button.setObjectName("neutralButton")
+        IconManager.apply_button(close_button, "cancel", IconManager.LIGHT)
+        close_button.clicked.connect(self.reject)
+
+        self.preview_button = QPushButton("Preview / Print")
+        self.preview_button.setObjectName("primaryButton")
+        IconManager.apply_button(self.preview_button, "print", IconManager.LIGHT)
+        self.preview_button.clicked.connect(self.preview_labels)
+
+        button_layout.addWidget(close_button)
+        button_layout.addWidget(self.preview_button)
+        layout.addLayout(button_layout)
+
+    def refresh_barcode_controls(self) -> None:
+        current_barcode = str(self.barcode_combo.currentData() or "").strip() if hasattr(self, "barcode_combo") else ""
+        self.barcode_combo.clear()
+        for index, barcode in enumerate(self.barcodes):
+            label = f"{barcode} (Primary)" if index == 0 else barcode
+            self.barcode_combo.addItem(label, barcode)
+        if current_barcode:
+            index = self.barcode_combo.findData(current_barcode)
+            if index >= 0:
+                self.barcode_combo.setCurrentIndex(index)
+
+    def update_mode_state(self, *_args) -> None:
+        is_barcode_mode = self.selected_label_mode() == LABEL_MODE_BARCODE
+        has_barcodes = bool(self.barcodes)
+        self.barcode_field_label.setVisible(is_barcode_mode)
+        self.barcode_combo.setVisible(is_barcode_mode)
+        self.generate_barcode_field_label.setVisible(is_barcode_mode and not has_barcodes)
+        self.barcode_combo.setEnabled(is_barcode_mode and has_barcodes)
+        self.generate_barcode_button.setVisible(is_barcode_mode and not has_barcodes)
+        self.update_preview_summary()
+
+    def update_preview_summary(self, *_args) -> None:
+        mode = self.selected_label_mode()
+        size_key = self.current_sticker_size_key()
+        size_info = STICKER_SIZES.get(size_key, STICKER_SIZES[DEFAULT_STICKER_SIZE])
+        quantity = self.quantity_spin.value()
+        barcode = self.current_barcode()
+        width = float(size_info["width_mm"])
+        height = float(size_info["height_mm"])
+        size_label = str(size_info["label"])
+
+        if mode == LABEL_MODE_BARCODE:
+            barcode_preview = barcode if barcode else "No barcode selected"
+            summary = (
+                f"Barcode sticker · {size_label} ({width:g}x{height:g} mm) · "
+                f"{quantity} copy{'ies' if quantity != 1 else ''}\n"
+                f"Barcode: {barcode_preview}"
+            )
+        else:
+            summary = (
+                f"Price label · {size_label} ({width:g}x{height:g} mm) · "
+                f"{quantity} copy{'ies' if quantity != 1 else ''}\n"
+                f"Shows product name and price"
+            )
+        self.preview_summary_label.setText(summary)
+
+    def update_size_description(self, *_args) -> None:
+        size_key = self.current_sticker_size_key()
+        size_info = STICKER_SIZES.get(size_key, STICKER_SIZES[DEFAULT_STICKER_SIZE])
+        self.size_help_label.setText(str(size_info["description"]))
+
+    def selected_label_mode(self) -> str:
+        if self.price_mode_radio.isChecked():
+            return LABEL_MODE_PRICE
+        return LABEL_MODE_BARCODE
+
+    def current_sticker_size_key(self) -> str:
+        return str(self.size_combo.currentData() or DEFAULT_STICKER_SIZE)
+
+    def current_barcode(self) -> str:
+        return str(self.barcode_combo.currentData() or "").strip()
+
+    def current_price_text(self) -> str:
+        return format_money(float(self.product.get("price") or 0), self.currency_symbol)
+
+    def generate_barcode(self) -> None:
+        product_id = int(self.product["id"])
+        barcode = generate_unique_internal_barcode(product_id)
+        updated_barcodes = [*self.barcodes, barcode]
+        self.generate_barcode_button.setEnabled(False)
+        self.preview_button.setEnabled(False)
+
+        def save_task() -> int:
+            return db.save_product_cloud_required(
+                product_id,
+                str(self.product.get("name") or ""),
+                float(self.product.get("price") or 0),
+                str(self.product.get("category") or ""),
+                float(self.product.get("stock_qty") or 0),
+                bool(self.product.get("requires_weight")),
+                str(self.product.get("image_path") or ""),
+                updated_barcodes,
+            )
+
+        def on_success(saved_product_id: int) -> None:
+            refreshed_product = db.get_product_by_id(saved_product_id)
+            if refreshed_product is not None:
+                self.product = refreshed_product
+            else:
+                self.product["barcodes"] = updated_barcodes
+                self.product["barcode"] = updated_barcodes[0]
+                self.product["primary_barcode"] = updated_barcodes[0]
+            self.product_updated = True
+            self.refresh_barcode_controls()
+            self.update_mode_state()
+            self.generate_barcode_button.setEnabled(True)
+            self.preview_button.setEnabled(True)
+            QMessageBox.information(self, "Barcode Generated", f"Generated barcode: {barcode}")
+
+        def on_error(error: Exception) -> None:
+            self.generate_barcode_button.setEnabled(True)
+            self.preview_button.setEnabled(True)
+            if isinstance(error, sqlite3.IntegrityError):
+                QMessageBox.warning(self, "Barcode Error", "Generated barcode already exists. Please try again.")
+                return
+            QMessageBox.warning(self, "Barcode Sync Error", friendly_error(error))
+
+        if not self.save_task_runner.start(
+            task=save_task,
+            message="Saving generated barcode...",
+            on_success=on_success,
+            on_error=on_error,
+            timeout_ms=PRODUCT_SYNC_TIMEOUT_MS,
+            timeout_message="Barcode sync is taking too long. Please check the network and try again.",
+        ):
+            self.generate_barcode_button.setEnabled(True)
+            self.preview_button.setEnabled(True)
+
+    def preview_labels(self) -> None:
+        mode = self.selected_label_mode()
+        barcode = self.current_barcode()
+        if mode == LABEL_MODE_BARCODE:
+            if not barcode:
+                QMessageBox.warning(
+                    self,
+                    "Barcode Required",
+                    "Generate a barcode before printing a barcode sticker.",
+                )
+                return
+            if not can_encode_code128(barcode):
+                QMessageBox.warning(
+                    self,
+                    "Unsupported Barcode",
+                    "Barcode can only contain standard printable characters for Code128.",
+                )
+                return
+
+        product_name = str(self.product.get("name") or "Product")
+        price_text = self.current_price_text()
+        size_key = self.current_sticker_size_key()
+        quantity = self.quantity_spin.value()
+        doc_name = "Barcode Label" if mode == LABEL_MODE_BARCODE else "Price Label"
+
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        configure_sticker_printer(printer, size_key, doc_name)
+        preview = QPrintPreviewDialog(printer, self)
+        preview.setWindowTitle(f"Print Preview - {doc_name}")
+        preview.resize(720, 520)
+        preview.paintRequested.connect(
+            lambda preview_printer: render_product_labels(
+                preview_printer,
+                mode,
+                product_name,
+                price_text,
+                barcode,
+                size_key,
+                quantity,
+            )
+        )
+        preview.exec()
+
+
+def generate_unique_internal_barcode(product_id: int) -> str:
+    for _attempt in range(100):
+        candidate = f"20{product_id:06d}{secrets.randbelow(1_000_000):06d}"
+        if not db.barcode_exists(candidate, exclude_product_id=product_id):
+            return candidate
+    raise RuntimeError("Could not generate a unique barcode. Please try again.")
+
+
 class ProductManagementWindow(QWidget):
     data_changed = pyqtSignal()
 
@@ -901,10 +1508,13 @@ class ProductManagementWindow(QWidget):
     def create_ui(self) -> None:
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(28, 24, 28, 28)
-        root_layout.setSpacing(18)
+        root_layout.setSpacing(16)
 
-        toolbar_layout = QHBoxLayout()
-        toolbar_layout.setSpacing(10)
+        toolbar_frame = QFrame()
+        toolbar_frame.setObjectName("toolbarWidget")
+        toolbar_frame_layout = QHBoxLayout(toolbar_frame)
+        toolbar_frame_layout.setContentsMargins(14, 8, 14, 8)
+        toolbar_frame_layout.setSpacing(10)
 
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search by Product Name or any Barcode...")
@@ -916,9 +1526,16 @@ class ProductManagementWindow(QWidget):
         IconManager.apply_button(add_button, "add", IconManager.LIGHT)
         add_button.clicked.connect(self.open_add_dialog)
 
-        toolbar_layout.addWidget(self.search_input, 1)
-        toolbar_layout.addWidget(add_button)
-        root_layout.addLayout(toolbar_layout)
+        self.print_label_button = QPushButton("Print Label")
+        self.print_label_button.setObjectName("secondaryButton")
+        self.print_label_button.setEnabled(False)
+        IconManager.apply_button(self.print_label_button, "print", IconManager.LIGHT)
+        self.print_label_button.clicked.connect(self.open_print_label_dialog)
+
+        toolbar_frame_layout.addWidget(self.search_input, 1)
+        toolbar_frame_layout.addWidget(self.print_label_button)
+        toolbar_frame_layout.addWidget(add_button)
+        root_layout.addWidget(toolbar_frame)
         root_layout.addWidget(self.create_table_panel(), 1)
 
     def create_table_panel(self) -> QWidget:
@@ -940,9 +1557,10 @@ class ProductManagementWindow(QWidget):
         self.products_table.setWordWrap(False)
         self.products_table.setIconSize(QSize(64, 48))
         self.products_table.verticalHeader().setVisible(False)
-        self.products_table.verticalHeader().setDefaultSectionSize(64)
+        self.products_table.verticalHeader().setDefaultSectionSize(68)
         self.products_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.products_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.products_table.selectionModel().selectionChanged.connect(self.update_print_label_button_state)
 
         header = self.products_table.horizontalHeader()
         header.setStretchLastSection(False)
@@ -955,11 +1573,11 @@ class ProductManagementWindow(QWidget):
         header.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(8, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(9, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(9, QHeaderView.ResizeMode.Fixed)
         self.products_table.setColumnWidth(1, 82)
         self.products_table.setColumnWidth(3, 220)
         self.products_table.setColumnWidth(8, 120)
-        self.products_table.setColumnWidth(9, 245)
+        self.products_table.setColumnWidth(9, ACTION_COLUMN_WIDTH)
 
         actions_delegate = ProductActionsDelegate(self.products_table)
         actions_delegate.edit_requested.connect(self.open_edit_dialog)
@@ -1014,6 +1632,7 @@ class ProductManagementWindow(QWidget):
         self.products_model.set_currency_symbol(get_currency_symbol_from_settings(get_setting))
         self.products_model.set_products(products, self.current_offset)
         self.products_loaded = True
+        self.update_print_label_button_state()
         self.update_pagination_controls()
 
     def update_pagination_controls(self) -> None:
@@ -1061,6 +1680,45 @@ class ProductManagementWindow(QWidget):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.load_products()
             self.data_changed.emit()
+
+    def open_print_label_dialog(self) -> None:
+        product_id = self.selected_product_id()
+        if product_id is None:
+            QMessageBox.information(self, "Select Product", "Please select a product to print labels.")
+            return
+
+        product = db.get_product_by_id(product_id)
+        if product is None:
+            QMessageBox.warning(self, "Product Missing", "This product could not be found.")
+            self.load_products()
+            return
+
+        dialog = ProductLabelPrintDialog(
+            product=product,
+            currency_symbol=get_currency_symbol_from_settings(get_setting),
+            parent=self,
+        )
+        dialog.exec()
+        if dialog.product_updated:
+            self.load_products()
+            self.data_changed.emit()
+
+    def selected_product_id(self) -> int | None:
+        selection_model = self.products_table.selectionModel()
+        if selection_model is None:
+            return None
+
+        selected_rows = selection_model.selectedRows()
+        if selected_rows:
+            return self.products_model.product_id_at(selected_rows[0].row())
+
+        current_index = self.products_table.currentIndex()
+        if current_index.isValid():
+            return self.products_model.product_id_at(current_index.row())
+        return None
+
+    def update_print_label_button_state(self, *_args) -> None:
+        self.print_label_button.setEnabled(self.selected_product_id() is not None)
 
     def delete_product(self, product_id: int) -> None:
         if not confirm_delete(
