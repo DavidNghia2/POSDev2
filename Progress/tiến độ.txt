@@ -1,298 +1,256 @@
 TIEN DO DU AN POS DESKTOP
-Cap nhat gan nhat: 2026-05-16
+Cap nhat gan nhat: 2026-06-14
 
 1. Trang thai hien tai
-- Du an la ung dung POS desktop viet bang Python + PyQt6.
-- App dung mot cua so chinh PosMainWindow va dieu huong noi dung bang QStackedWidget.
-- Sidebar ben trai hien cac khu vuc theo quyen: dashboard, POS Terminal, Product Management va cac trang admin.
-- Database runtime la SQLite, file chinh: pos.db.
-- App hien co cac nhom chuc nang:
-  + Dang nhap, giu phien dang nhap, dang xuat.
-  + POS Terminal de ban hang, thanh toan, in/xem hoa don.
-  + Product Management de quan ly danh muc san pham.
+- Du an la ung dung POS desktop bang Python + PyQt6.
+- Supabase la backend chinh cho auth, users, registers, products, product images, sales, inventory, realtime va edge functions.
+- SQLite van duoc dung lam local cache/offline store tai `%LOCALAPPDATA%\RetailPOS\pos.db`.
+- App chay tu `main.py`, thu khoi phuc session da luu, sau do mo `PosMainWindow`.
+- `app_paths.py` quan ly duong dan `.env`, runtime DB va cache.
+- UI chinh dung QStackedWidget va sidebar theo role/permissions.
+- Nhom tinh nang hien co:
+  + Login/register store owner, giu phien dang nhap, logout.
+  + POS Terminal, checkout, split payment, receipt preview.
+  + Product Management: add/edit modal, barcode, image upload/cache, label printing, sync status, retry.
   + Admin: users, registers, reports, audit logs, settings.
-- Cac trang co the tu reload du lieu thong qua signal chung app_data_changed.
+  + Background sync, realtime dirty-event sync, network/offline notification.
+  + Light/dark theme toggle runtime.
 
-2. Cac thay doi da sua / da bo sung
-- Chuc nang cu: App tung dung viec xoa barcode sau khi ban de gia lap het hang.
-  Chuc nang moi: Barcode la ma nhan dien co dinh, stock_qty la nguon ton kho chinh.
-  Da sua: Bo logic xoa barcode sau sale, moi lan ban chi tru stock_qty.
+2. Cac thay doi hien tai / da hoan thanh
+- Chuyen project tu local-only sang Supabase-first.
+- Them `cloud/`:
+  + `cloud/supabase_client.py`: doc `.env` va tao Supabase client.
+  + `cloud/auth.py`: login, register store owner, profile, restore session, admin edge functions.
+  + `cloud/products.py`: product CRUD, barcode sync, Storage upload/download, inventory adjustment.
+  + `cloud/inventory.py`: `checkout_sale`, recent sales, sale items/payments, registers.
+- Them cac truong local de sync: `store_id`, `cloud_id`, `sync_status`, `sync_error`, `last_synced_at`, `deleted_at`.
+- Cache Supabase profile vao local users table.
+- Luu Supabase session token trong luong remember login.
+- Them UI register store owner.
+- Product Management dung cloud-required save/delete voi cloud store.
+- Bang product hien sync state va co retry khi pending/error.
+- Anh product upload len Supabase Storage va cache ve local.
+- Checkout uu tien Supabase RPC `checkout_sale` de sale/payment/stock commit cung nhau.
+- Offline checkout chi mo cho Admin, luu local `pending_offline` de sync sau.
+- Them retry pending product/sale.
+- Them background sync timer va realtime worker.
+- Them network status/friendly error notification.
+- Them light/dark theme va nut toggle runtime.
+- Cap nhat flow build PyInstaller + Inno Setup.
 
-- Chuc nang cu: Barcode da ban van co the quet lai va di tiep.
-  Chuc nang moi: Barcode het hang/da ban bi chan ngay.
-  Da sua: Them kiem tra khi quet, kiem tra lai truoc khi thanh toan, va them lop validate o database de khong ban lot khi ton kho thay doi.
-
-- Chuc nang cu: Gio hang tung chan quet lap lai cung mot barcode.
-  Chuc nang moi: Quet lai cung barcode se tang so luong cua san pham.
-  Da sua: Gio hang quay ve xu ly theo product_id, phu hop voi barcode co dinh va ton kho theo so luong.
-
-- Chuc nang cu: Shift + F5 chi refresh, khong co phan hoi giao dien.
-  Chuc nang moi: Reset co thong bao thanh cong.
-  Da sua: Them toast/animation "Reset successful" va status bar message.
-
-- Chuc nang cu: Dong app la phai dang nhap lai.
-  Chuc nang moi: Giu phien dang nhap sau khi tat app.
-  Da sua: Them session persistence; neu bat "Keep me logged in" thi mo app se vao lai tai khoan truoc do.
-
-- Chuc nang cu: Khong co nut dang xuat.
-  Chuc nang moi: Co nut Logout tren sidebar.
-  Da sua: Them nut Logout kem icon, xoa session va quay lai man hinh login.
-
-- Chuc nang cu: Hoa don co the hien truoc khi thanh toan hoan tat.
-  Chuc nang moi: Hoa don chi duoc tao/hien sau khi thanh toan thanh cong.
-  Da sua: Sua lai luong payment -> dialog accepted -> moi finalize payment va hien receipt.
-
-- Chuc nang cu: Manager Dashboard hien du lieu tinh, khong tu cap nhat sau giao dich moi.
-  Chuc nang moi: Manager Dashboard co the reload va cap nhat theo signal toan app.
-  Da sua: Them reload_data cho dashboard Manager va noi vao he thong refresh chung.
-
-- Chuc nang cu: Dashboard co the tinh sai du lieu "hom nay" do created_at luu UTC nhung UI loc theo ngay local.
-  Chuc nang moi: Admin, Manager va Cashier Dashboard deu tinh ngay theo local time thong nhat.
-  Da sua: Doi truy van ngay sang date/datetime(created_at, 'localtime') de khong bi lech ngay gan nua dem.
-
-- Chuc nang cu: Product Management chia doi man hinh, form ben trai va bang ben phai.
-  Chuc nang moi: Product Management chi con man danh sach, thao tac them/sua bang popup modal.
-  Da sua: Bo panel Product Details ben trai, tao ProductDialog dung chung cho Add Product va Edit Product.
-
-- Chuc nang cu: Sua/xoa san pham phu thuoc vao form chung va dong dang chon.
-  Chuc nang moi: Moi dong trong bang co nut Edit va Delete rieng.
-  Da sua: Them action buttons theo tung dong, modal Edit tu dien du lieu cu, sau Save/Delete bang tu reload.
-
-3. Cau truc file chinh
-- main.py
-  Entry point chinh; tao QApplication, khoi tao auth DB, khoi phuc session neu co, mo PosMainWindow.
-
-- pos_terminal.py
-  Wrapper de lenh chay cu van hoat dong.
-
-- login/login_window.py
-  Dang nhap, verify user, session persistence, settings auth, cash shift helpers.
-
-- database/db.py
-  Helper database chung: products, barcodes, sales, ton kho theo stock_qty, validate sale, migration inventory model.
-
-- pos_terminal/pos_window.py
-  Main window, sidebar, POS Terminal, cart, payment, receipt preview, reset toast, logout.
-
-- product_management/product_management_window.py
-  Product list page va ProductDialog modal cho Add/Edit Product.
-
-- admin/*
+3. File chinh
+- `main.py`
+  Entry point; tao QApplication, init auth DB, restore user, mo main window.
+- `app_paths.py`
+  Resolve project/external root, `.env`, user data dir, DB path, cache dir.
+- `pos_terminal.py`
+  Wrapper giu lenh chay cu.
+- `login/login_window.py`
+  Supabase login/register, local auth cache, session, users/registers/shifts/settings/audit helpers.
+- `database/db.py`
+  SQLite schema, query product/sale, validate inventory, local cache, cloud sync, offline pending sale retry.
+- `cloud/*`
+  Supabase client/auth/product/inventory integration.
+- `pos_terminal/pos_window.py`
+  Main shell, sidebar, POS, cart, checkout, receipt, background sync, realtime sync, theme toggle, logout.
+- `pos_terminal/realtime_worker.py`
+  Supabase realtime listener de queue local sync.
+- `product_management/product_management_window.py`
+  Product list, ProductDialog, barcode validation, image selection, label printing, sync status/retry.
+- `product_management/label_printing.py`
+  Print/preview label.
+- `admin/*`
   Dashboard, users, registers, reports, audit logs, settings.
+- `ui/theme.py`
+  Light/dark styles va combo popup fix.
+- `ui/loading.py`
+  Blocking/background task runners va timeout overlay.
+- `ui/notifications.py`
+  Friendly errors, toast notifications, network status.
+- `build_exe.ps1`
+  Script build PyInstaller.
+- `build_installer.ps1`
+  Script staging/build installer bang Inno.
+- `installer/RetailPOS.iss`
+  File Inno Setup.
 
-- ui/icon_manager.py
-  Quan ly icon dung chung cho toan app.
+4. Runtime data
+- Supabase la data chinh cho production/cloud store.
+- SQLite la local cache/offline support, khong duoc package.
+- DB mac dinh:
+  + `%LOCALAPPDATA%\RetailPOS\pos.db`
+- Override khi dev:
+  + `POS_DB_PATH=...`
+- Product images:
+  + source: Supabase Storage bucket `product-images`
+  + cache: `%LOCALAPPDATA%\RetailPOS\cache`
+- `.env` duoc tim o:
+  + folder canh installed exe
+  + project root khi development
 
-- Progress/tiến độ.txt
-  Tai lieu tien do tieng Viet.
-
-- Progress/POS DESKTOP PROJECT PROGRESS.txt
-  Tai lieu tien do tieng Anh.
-
-4. Dong bo du lieu toan app
-- PosMainWindow co signal chung:
-  app_data_changed = pyqtSignal()
-- Cac trang ghi DB co the emit data_changed sau khi save/update/delete.
-- Luong refresh:
-  page.data_changed -> notify_app_data_changed() -> app_data_changed.emit()
-- MainWindow tu tim ham reload cua tung trang:
-  + reload_data
-  + load_dashboard_data
-  + load_products
-  + load_users
-  + load_registers
-  + load_settings
-  + load_report
-  + load_logs
-- Shift + F5:
-  + Refresh du lieu toan app.
-  + Hien toast reset thanh cong.
-
-5. Database hien tai
-- Cac bang chinh:
+5. Database va sync
+- Bang local quan trong:
+  + stores
+  + roles
+  + users
+  + registers
+  + cash_shifts
+  + cash_movements
+  + audit_logs
+  + settings
   + products
   + product_barcodes
   + sales
   + sale_items
   + sale_payments
   + sync_queue
-- products co cac truong nhu barcode, sku, stock_qty, active, updated_at, image_path.
-- product_barcodes luu nhieu barcode cho mot san pham, co is_primary.
-- sales va sale_items luu lich su giao dich.
-- Co them logic:
-  + get_available_stock()
-  + is_barcode_available()
-  + was_barcode_sold()
-  + ensure_sale_items_available()
-- stock_qty la nguon su that cua ton kho.
-- Da them migration mot lan de chuyen du lieu cu sang inventory model moi.
-- Ly do khong xoa barcode sau moi lan ban:
-  + Trong ban le thong thuong, barcode dai dien cho loai san pham, khong dai dien cho tung don vi rieng le.
-  + Vi du nhieu chai Coca cung loai co the dung chung mot barcode.
-  + Neu ban 1 chai ma xoa barcode thi chai tiep theo cung loai se khong quet duoc du van con hang.
-  + So luong con lai phai duoc quan ly bang stock_qty.
-  + Neu can theo doi tung mon rieng nhu dien thoai, ve, gift card, IMEI/serial thi nen tao bang rieng kieu serial_items/inventory_units, khong dung barcode san pham de thay the.
+- Product sync:
+  + cloud store dung `save_product_cloud_required()`.
+  + pending/error co the retry.
+  + pull tu cloud update cache local va inactive product khong con tren cloud.
+- Sale sync:
+  + checkout binh thuong goi RPC `checkout_sale`.
+  + local sale duoc luu `synced` sau cloud success.
+  + Admin offline sale duoc luu `pending_offline`.
+  + retry se push pending sale len cloud.
+- Background sync:
+  + retry pending products/sales
+  + pull products
+  + pull recent sales
+  + refresh users/registers
+- Realtime sync:
+  + event cloud danh dau dirty product/sale
+  + main window queue sync theo loai du lieu
 
-6. POS Terminal hien tai
+6. POS Terminal
 - Layout:
-  + Sidebar trai.
-  + Product grid o giua.
-  + Cart + totals + action buttons ben phai.
+  + sidebar trai
+  + product grid o giua
+  + cart/totals/actions ben phai
 - Product grid:
-  + Search/scan barcode.
-  + Card hien anh, ten, barcode, gia.
-  + Enter de tim theo barcode/name.
+  + search/scan barcode/name
+  + card co image/name/barcode/price
 - Cart:
-  + Columns: Barcode, Name, Qty, Price, Total, Remove.
-  + Qty co the sua neu hop le.
-  + Quet lai cung barcode se tang qty cua san pham.
-  + Gio hang kiem tra ton kho truoc khi thanh toan.
-- Actions:
+  + quet lap lai thi merge theo product
+  + validate stock truoc checkout
+  + sua qty va remove row
+- Checkout:
   + Pay
   + Split Payment
   + Cancel
-- Sidebar:
-  + Co nut Logout.
+  + Receipt chi hien sau payment accepted
+- Offline:
+  + mat mang hien notification
+  + Admin co the offline checkout; role khac can cloud sync
 
-7. Thanh toan va hoa don
-- Pay:
-  + Mo Payment dialog.
-  + Kiem tra ton kho truoc khi luu sale.
-  + Chi khi dialog duoc Accept thi moi finalize payment.
-- Split Payment:
-  + Ho tro Cash + Card/Transfer.
-  + Cung chi hien hoa don sau khi thanh toan thanh cong.
-- Receipt Preview:
-  + Hien sau sale thanh cong.
-  + Gom payment method, item, total, tendered, change.
-- Khong con luong preview hoa don truoc khi giao dich thanh cong.
-
-8. Dashboard hien tai
-- Cashier Dashboard:
-  + Co the reload du lieu.
-  + Hien Today's Sales, Revenue, Items Sold theo ngay local.
-- Manager Dashboard:
-  + Co the reload du lieu.
-  + Hien Revenue, Transactions, Avg. Sale theo ngay local.
-- Admin Dashboard:
-  + Co load_dashboard_data() va ho tro bo loc ngay.
-  + Cac truy van tong hop, payment breakdown va top products deu dung local time.
-
-9. Product Management hien tai
-- Man chinh chi gom:
-  + Search
+7. Product Management
+- Man chinh:
+  + search
   + Add Product
-  + Bang san pham
-  + Edit/Delete theo tung dong
-- Add Product:
-  + Mo ProductDialog modal.
-  + Save xong dong popup va reload bang.
-- Edit Product:
-  + Mo ProductDialog modal.
-  + Tu dien du lieu cu.
-  + Save xong dong popup va reload bang.
-- Modal van ho tro:
-  + Hinh anh san pham.
-  + Nhieu barcode.
-  + Primary/linked barcode.
-  + Stock Quantity.
-  + Validate barcode trung.
+  + table/list
+  + row actions
+  + sync status/retry
+- ProductDialog:
+  + add/edit product
+  + chon image
+  + nhieu barcode
+  + primary/linked barcode
+  + stock quantity
+  + validate barcode trung
+- Image:
+  + chon file local
+  + upload Supabase Storage khi save
+  + download/cache khi pull cloud
+- Label printing:
+  + Qt print preview
 
-10. Dang nhap va phien lam viec
-- Login co toggle "Keep me logged in".
-- Neu bat toggle:
-  + user id duoc luu trong settings.
-  + Mo app lan sau se tu khoi phuc user.
-- Logout:
-  + Xoa session.
-  + Quay lai man login.
+8. Admin va Settings
+- User Management:
+  + pull store users tu Supabase
+  + admin create/update qua edge functions
+  + soft delete/deactivate
+- Register Management:
+  + local register cache
+  + pull registers tu cloud
+- Reports/Dashboards:
+  + local-day calculation de tranh lech UTC
+  + sales/revenue/items summaries
+- Settings:
+  + store settings
+  + currency
+  + QR/payment display assets
 
-11. Cach chay app
-- Cai moi truong:
-  .\setup.ps1
-- Chay app:
-  .\.venv\Scripts\python.exe main.py
-- Lenh cu van chay duoc:
-  .\.venv\Scripts\python.exe pos_terminal.py
+9. Theme va UI
+- Theme runtime:
+  + light
+  + dark
+- `ui/theme.py` build styles theo mode.
+- Main window co nut theme toggle.
+- Product Management va admin pages doc current theme.
+- Combo popup black-corner fix da gom ve mot cho.
+- Icon system dung `qtawesome`.
 
-12. Kiem tra da chay
-- Compile:
-  + python -m compileall main.py login database pos_terminal product_management admin ui
-- Test database tam:
-  + Xoa barcode sau sale.
-  + Session persistence.
-  + Chan het hang va validate ton kho.
-- Smoke test UI offscreen:
-  + Reset toast.
-  + Khong hien receipt neu payment dialog bi reject.
-  + Modal Add/Edit Product.
-  + Bang Product Management co action buttons theo dong.
-  + Manager Dashboard reload duoc sau giao dich moi.
-  + Admin Dashboard doc dung giao dich gan nua dem theo ngay local.
+10. Build va Installer
+- Setup:
+  + `.\setup.ps1`
+- Run source:
+  + `.\.venv\Scripts\python.exe main.py`
+- Build EXE folder:
+  + `.\build_exe.ps1`
+- Build one-file EXE:
+  + `.\build_exe.ps1 -OneFile`
+- Build installer:
+  + `.\build_installer.ps1`
+- Installer output:
+  + `installer\Output\RetailPOSSetup.exe`
+- Cai vao:
+  + `%LOCALAPPDATA%\Programs\RetailPOS`
+- Build chi bundle asset UI bat buoc, khong bundle `assets\products`.
+- Installer include `.env` hien tai; chi dung `SUPABASE_ANON_KEY`, khong dung service-role key.
 
-13. Viec nen lam tiep
-- Mo rong Inventory UI neu can nhap/xuat kho, lich su dieu chinh va ton theo chi nhanh.
-- Them sale history page.
-- Them receipt number / sale_id vao receipt.
-- Them export receipt ra TXT/PDF.
+11. Verify nen chay
+- `setup.ps1` install dependencies va compile-check:
+  + `app_paths.py`
+  + `main.py`
+  + `cloud`
+  + `login`
+  + `pos_terminal`
+  + `product_management`
+  + `admin`
+  + `database`
+  + `ui`
+- `build_exe.ps1` cung compile-check runtime code truoc PyInstaller.
+- Truoc release nen test:
+  + source app login
+  + add/edit/delete product
+  + product sync retry
+  + checkout qua cloud
+  + Admin offline pending sale
+  + installer tren Windows user profile sach
+
+12. Viec nen lam tiep
+- Them local migration version table ro rang.
+- Them Sales History page.
 - Them refund/return workflow.
-- Them dialog chon san pham khi search ra nhieu ket qua.
-- Them category management neu can tach rieng.
-- Them discount theo tung item.
+- Them receipt number / sale_id tren receipt.
+- Them export receipt TXT/PDF.
+- Them Inventory adjustment UI va movement history.
+- Them conflict resolution UI cho pending offline sales.
+- Them dialog chon product khi search ra nhieu ket qua.
+- Them category management neu category thanh du lieu rieng.
+- Them item-level discount.
 - Them tax/VAT/service charge.
-- Them migration versioning ro rang hon.
+- Them automated smoke tests cho login/product/checkout.
 
-14. Ghi chu cho nguoi tiep tuc code
-- Han che viet SQL truc tiep trong UI; nen dat helper vao database/db.py.
-- Page nao ghi DB thi nen emit data_changed sau khi thay doi.
-- Page nao can refresh thi nen co reload_data().
-- Neu sua POS thi xem pos_terminal/pos_window.py.
-- Neu sua Product Management thi xem product_management/product_management_window.py.
-- Neu sua login/session thi xem login/login_window.py.
-- Neu sua schema/helper thi xem database/db.py.
-- pos.db la runtime database, du lieu co the khac giua cac may.
-
-
-Thiết kế khi đi online và xuất ra app :
-
-1. Khi xuất `.exe`
-- `.exe` chỉ chứa chương trình.
-- Dữ liệu người dùng không nằm trong `.exe`.
-- Khi chạy lần đầu:
-  - app tự tạo database mới ở thư mục riêng của máy người dùng
-  - ví dụ: `AppData/Roaming/YourPOS/pos.db`
-- Khi cập nhật bản mới:
-  - giữ database cũ
-  - chỉ chạy migration để nâng cấu trúc bảng nếu cần
-
-2. Cấu trúc dữ liệu nên tách
-- `schema/migrations`: tạo và nâng cấp database
-- `seed data`: dữ liệu mặc định ban đầu nếu cần
-- `user data`: database thật của khách hàng, nằm ngoài app
-
-3. Khi làm online
-- Server database = dữ liệu chính
-- Local database = dữ liệu offline/cache
-- Mỗi bảng quan trọng nên có:
-  - `id`
-  - `updated_at`
-  - `deleted_at` hoặc `is_deleted`
-  - `sync_status`
-- Khi mất mạng:
-  - app vẫn bán hàng bằng local DB
-- Khi có mạng lại:
-  - đẩy thay đổi lên server
-  - kéo thay đổi mới từ server xuống
-
-4. Nên chuẩn bị từ bây giờ
-- Có hệ thống migration version rõ ràng
-- Không hardcode đường dẫn `pos.db` trong thư mục source
-- Dùng UUID hoặc ID ổn định nếu sau này sync nhiều máy
-- Có bảng `sync_queue` để lưu các thay đổi chưa gửi lên server
-
-Tóm gọn:
-- Desktop offline: local DB riêng theo từng máy
-- Cập nhật app: migrate, không ghi đè data
-- Online sau này: server là nguồn chuẩn, local DB giúp offline-first
-
-Nếu muốn, mình có thể nói tiếp cho bạn “nên có những bảng nào khi làm online” trong 1 danh sách ngắn.
+13. Ghi chu developer
+- Uu tien helper DB/cloud thay vi raw SQL trong UI.
+- Page nao ghi data nen emit `data_changed` hoac `sync_requested` neu can.
+- Page nao can refresh nen co `reload_data()`.
+- Sua POS: `pos_terminal/pos_window.py`.
+- Sua Product Management: `product_management/product_management_window.py`.
+- Sua login/session/store auth: `login/login_window.py`.
+- Sua local DB/schema/sync: `database/db.py`.
+- Sua Supabase API: `cloud/` va `supabase/`.
+- Sua build/runtime path: `app_paths.py`, `build_exe.ps1`, `build_installer.ps1`, `installer/RetailPOS.iss`.
+- Sau thay doi lon, cap nhat `Progress/`, `BUILD_EXE.md`, `README_SETUP.md`, `requirements.txt`, `setup.ps1`, va `TODO.md`.
+#Created by Truong Quang Nghia, David Nghia SWUST

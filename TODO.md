@@ -1,11 +1,16 @@
-# Theme Mode Implementation
+# Retail POS TODO
 
-- [x] Add light/dark theme mode support helpers in `ui/theme.py`
-- [x] Make combobox popup fix use dynamic colors based on current theme
-- [x] Add mode-aware stylesheet builder in `ui/theme.py`
-- [x] Update `pos_terminal/pos_window.py` to consume mode-aware theme builders
-- [x] Add in-app runtime toggle action/button for light/dark mode
-- [x] Reapply stylesheet instantly on toggle across open widgets and dialogs
-- [x] Make Product Management styles build from the current runtime theme
-- [x] Remove stale one-off theme patch script
-- [x] Run syntax validation
+Cap nhat: 2026-06-14
+
+## Current status
+
+- [x] Python + PyQt6 desktop POS shell
+- [x] Supabase login/register store owner
+- [x] Local SQLite cache under `%LOCALAPPDATA%\RetailPOS\pos.db`
+- [x] Product sync with Supabase, Storage image upload/download, retry status
+- [x] Checkout through Supabase `checkout_sale` RPC
+- [x] Admin-only offline checkout pending sync
+- [x] Background sync timer and realtime dirty-event sync
+- [x] User/register sync from Supabase
+- [x] Light/dark runtime theme toggle
+- [x] Inno Setup installer script and build scripts

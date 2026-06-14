@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_NAME = "RetailPOS"
 PROJECT_ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-
+#Created by Truong Quang Nghia, David Nghia SWUST
 
 def external_root_dir() -> Path:
     if getattr(sys, "frozen", False):
