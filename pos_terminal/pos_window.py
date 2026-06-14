@@ -1,12 +1,23 @@
 from dataclasses import dataclass
 from datetime import datetime
-from html import escape
 from pathlib import Path
 from textwrap import wrap
 from uuid import uuid4
 
-from PyQt6.QtCore import QSize, Qt, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QDoubleValidator, QFont, QFontMetrics, QKeySequence, QShortcut, QTextDocument
+from PyQt6.QtCore import QMarginsF, QPointF, QSize, QSizeF, Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import (
+    QAction,
+    QColor,
+    QDoubleValidator,
+    QFont,
+    QFontMetrics,
+    QFontMetricsF,
+    QKeySequence,
+    QPageLayout,
+    QPageSize,
+    QPainter,
+    QShortcut,
+)
 from PyQt6.QtPrintSupport import QPrintPreviewDialog, QPrinter
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -89,6 +100,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 PAYMENT_QR_DISPLAY_SIZE = 280
 SPLIT_PAYMENT_QR_DISPLAY_SIZE = 210
 POS_PRODUCT_GRID_LIMIT = 120
+RECEIPT_FONT_FAMILY = "Courier New"
+RECEIPT_FONT_POINT_SIZE = 9
+RECEIPT_PREVIEW_DPI = 96.0
+RECEIPT_MM_PER_INCH = 25.4
+RECEIPT_PAPER_MIN_WIDTH_PX = 286
+RECEIPT_PAPER_PADDING_X_PX = 18
+RECEIPT_PAPER_PADDING_Y_PX = 16
 
 
 @dataclass
@@ -104,6 +122,18 @@ class CartItem:
     @property
     def subtotal(self) -> float:
         return self.qty * self.unit_price
+
+
+@dataclass(frozen=True)
+class ReceiptLayout:
+    font: QFont
+    lines: list[str]
+    text_width_px: int
+    text_height_px: int
+    paper_width_px: int
+    paper_height_px: int
+    paper_width_mm: float
+    paper_height_mm: float
 
 
 class SidebarButton(QPushButton):
@@ -2318,6 +2348,43 @@ class PosMainWindow(QMainWindow):
 
         return "\n".join(lines)
 
+    def build_receipt_layout(self, receipt_text: str) -> ReceiptLayout:
+        receipt_font = QFont(RECEIPT_FONT_FAMILY, RECEIPT_FONT_POINT_SIZE)
+        receipt_font.setStyleHint(QFont.StyleHint.Monospace)
+        receipt_font.setFixedPitch(True)
+
+        receipt_lines = receipt_text.splitlines() or [""]
+        font_metrics = QFontMetrics(receipt_font, self)
+        text_width = max(font_metrics.horizontalAdvance(line) for line in receipt_lines)
+        text_height = font_metrics.lineSpacing() * len(receipt_lines) + (font_metrics.lineSpacing() * 2)
+        paper_width = max(RECEIPT_PAPER_MIN_WIDTH_PX, text_width + RECEIPT_PAPER_PADDING_X_PX * 2)
+        paper_height = text_height + RECEIPT_PAPER_PADDING_Y_PX * 2
+        preview_dpi_x = self.logicalDpiX() or RECEIPT_PREVIEW_DPI
+        preview_dpi_y = self.logicalDpiY() or RECEIPT_PREVIEW_DPI
+
+        return ReceiptLayout(
+            font=receipt_font,
+            lines=receipt_lines,
+            text_width_px=text_width,
+            text_height_px=text_height,
+            paper_width_px=paper_width,
+            paper_height_px=paper_height,
+            paper_width_mm=paper_width * RECEIPT_MM_PER_INCH / preview_dpi_x,
+            paper_height_mm=paper_height * RECEIPT_MM_PER_INCH / preview_dpi_y,
+        )
+
+    def configure_receipt_printer(self, printer: QPrinter, layout: ReceiptLayout) -> None:
+        printer.setDocName("Sales Receipt")
+        printer.setFullPage(True)
+        printer.setPageSize(
+            QPageSize(
+                QSizeF(layout.paper_width_mm, layout.paper_height_mm),
+                QPageSize.Unit.Millimeter,
+                "Receipt Preview",
+            )
+        )
+        printer.setPageMargins(QMarginsF(0, 0, 0, 0), QPageLayout.Unit.Millimeter)
+
     def show_receipt_preview(self, receipt_text: str) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("Receipt Preview")
@@ -2332,38 +2399,31 @@ class PosMainWindow(QMainWindow):
         preview_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(preview_title)
 
-        receipt_font = QFont("Courier New", 9)
-        receipt_font.setStyleHint(QFont.StyleHint.Monospace)
-        receipt_font.setFixedPitch(True)
-
-        receipt_lines = receipt_text.splitlines() or [""]
-        font_metrics = QFontMetrics(receipt_font)
-        text_width = max(font_metrics.horizontalAdvance(line) for line in receipt_lines)
-        text_height = font_metrics.lineSpacing() * len(receipt_lines) + (font_metrics.lineSpacing() * 2)
-
-        paper_padding_x = 18
-        paper_padding_y = 16
-        paper_width = max(286, text_width + paper_padding_x * 2)
-        paper_height = text_height + paper_padding_y * 2
+        receipt_layout = self.build_receipt_layout(receipt_text)
 
         receipt_paper = QFrame()
         receipt_paper.setObjectName("receiptPreviewPaper")
-        receipt_paper.setFixedWidth(paper_width)
-        receipt_paper.setMinimumHeight(paper_height)
+        receipt_paper.setFixedWidth(receipt_layout.paper_width_px)
+        receipt_paper.setMinimumHeight(receipt_layout.paper_height_px)
 
         paper_layout = QVBoxLayout(receipt_paper)
-        paper_layout.setContentsMargins(paper_padding_x, paper_padding_y, paper_padding_x, paper_padding_y)
+        paper_layout.setContentsMargins(
+            RECEIPT_PAPER_PADDING_X_PX,
+            RECEIPT_PAPER_PADDING_Y_PX,
+            RECEIPT_PAPER_PADDING_X_PX,
+            RECEIPT_PAPER_PADDING_Y_PX,
+        )
         paper_layout.setSpacing(0)
 
         receipt_label = QLabel(receipt_text)
         receipt_label.setObjectName("receiptPreviewText")
-        receipt_label.setFont(receipt_font)
+        receipt_label.setFont(receipt_layout.font)
         receipt_label.setTextFormat(Qt.TextFormat.PlainText)
         receipt_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         receipt_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         receipt_label.setWordWrap(False)
-        receipt_label.setMinimumWidth(text_width)
-        receipt_label.setMinimumHeight(text_height)
+        receipt_label.setMinimumWidth(receipt_layout.text_width_px)
+        receipt_label.setMinimumHeight(receipt_layout.text_height_px)
         receipt_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Minimum)
 
         paper_layout.addWidget(receipt_label, 0, Qt.AlignmentFlag.AlignCenter)
@@ -2417,8 +2477,9 @@ class PosMainWindow(QMainWindow):
         dialog.exec()
 
     def print_receipt(self, receipt_text: str) -> None:
+        receipt_layout = self.build_receipt_layout(receipt_text)
         printer = QPrinter(QPrinter.PrinterMode.HighResolution)
-        printer.setDocName("Sales Receipt")
+        self.configure_receipt_printer(printer, receipt_layout)
         preview = QPrintPreviewDialog(printer, self)
         preview.setWindowTitle("Print Preview - Receipt")
         preview.resize(420, 720)
@@ -2426,31 +2487,34 @@ class PosMainWindow(QMainWindow):
         preview.exec()
 
     def render_receipt_to_printer(self, printer: QPrinter, receipt_text: str) -> None:
-        document = QTextDocument(self)
-        document.setHtml(self.build_receipt_print_html(receipt_text))
-        document.print(printer)
+        receipt_layout = self.build_receipt_layout(receipt_text)
+        self.configure_receipt_printer(printer, receipt_layout)
 
-    def build_receipt_print_html(self, receipt_text: str) -> str:
-        return f"""
-        <html>
-            <head>
-                <style>
-                    body {{
-                        color: #111827;
-                        font-family: "Courier New", monospace;
-                        font-size: 10pt;
-                    }}
-                    pre {{
-                        margin: 0;
-                        white-space: pre;
-                    }}
-                </style>
-            </head>
-            <body>
-                <pre>{escape(receipt_text)}</pre>
-            </body>
-        </html>
-        """
+        painter = QPainter()
+        if not painter.begin(printer):
+            return
+
+        try:
+            page_rect = printer.pageRect(QPrinter.Unit.DevicePixel)
+            painter.fillRect(page_rect, QColor("#FFFFFF"))
+            painter.setPen(QColor("#111827"))
+            painter.setFont(receipt_layout.font)
+
+            font_metrics = QFontMetricsF(receipt_layout.font, painter.device())
+            line_spacing = font_metrics.lineSpacing()
+            max_text_width = max(font_metrics.horizontalAdvance(line) for line in receipt_layout.lines)
+            scale_y = page_rect.height() / receipt_layout.paper_height_px
+            text_left = page_rect.left() + (page_rect.width() - max_text_width) / 2
+            baseline_y = (
+                page_rect.top()
+                + (RECEIPT_PAPER_PADDING_Y_PX * scale_y)
+                + font_metrics.ascent()
+            )
+
+            for index, line in enumerate(receipt_layout.lines):
+                painter.drawText(QPointF(text_left, baseline_y + (index * line_spacing)), line)
+        finally:
+            painter.end()
 
     def clear_current_sale(self) -> None:
         self.cart_items.clear()
