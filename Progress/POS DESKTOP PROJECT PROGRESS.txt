@@ -1,120 +1,126 @@
 POS DESKTOP PROJECT PROGRESS
-Last Updated: 2026-05-16
+Last Updated: 2026-06-14
 
 1. Current Status
 - Desktop POS application built with Python + PyQt6.
-- One main PosMainWindow with QStackedWidget-based navigation.
-- Left sidebar exposes dashboards, POS Terminal, Product Management, and admin pages according to permissions.
-- Runtime database: SQLite file pos.db.
+- Supabase is the cloud source of truth for auth, store users, registers, products, product images, sales, inventory, realtime updates, and admin edge functions.
+- SQLite remains the local runtime cache/offline store at `%LOCALAPPDATA%\RetailPOS\pos.db`.
+- App starts from `main.py`, restores a remembered Supabase/local session when possible, then opens `PosMainWindow`.
+- `app_paths.py` centralizes `.env` lookup, runtime DB path, and cache path.
+- Main UI uses a QStackedWidget shell with sidebar navigation based on role permissions.
 - Current major areas:
-  + Login, session persistence, logout.
-  + POS Terminal, payment, receipt preview.
-  + Product Management.
+  + Login/register store owner, session persistence, logout.
+  + POS Terminal, checkout, split payment, receipt preview.
+  + Product Management with modal add/edit, barcode handling, image upload/cache, label printing, sync status, retry.
   + Admin: users, registers, reports, audit logs, settings.
-- Shared refresh flow is handled through app_data_changed.
+  + Background sync, realtime dirty-event sync, and network/offline notifications.
+  + Runtime light/dark theme toggle.
 
-2. Recently Completed Changes
-- Old: the app briefly used sold-barcode removal as a proxy for inventory.
-  New: barcode is stable product identity and stock_qty is the inventory source of truth.
-  Changed: removed sold-barcode deletion from the sale flow; sales now reduce stock_qty only.
-
-- Old: already-sold barcodes could be scanned again.
-  New: unavailable/out-of-stock barcodes are blocked immediately.
-  Changed: validation added on scan, before payment, and again inside the database sale transaction.
-
-- Old: scanning the same barcode twice was blocked.
-  New: scanning the same barcode again increases product quantity.
-  Changed: cart logic now merges by product_id, matching fixed product barcodes plus quantity-based inventory.
-
-- Old: Shift+F5 refreshed silently.
-  New: reset shows visible success feedback.
-  Changed: added reset toast animation and status-bar message.
-
-- Old: closing the app required a new login next time.
-  New: session can persist across app restarts.
-  Changed: added stored session recovery using the existing “Keep me logged in” toggle.
-
-- Old: no logout action existed.
-  New: sidebar includes Logout.
-  Changed: added logout icon/button, session clearing, and return-to-login flow.
-
-- Old: receipt preview could appear before payment fully completed.
-  New: receipt is created/displayed only after successful payment completion.
-  Changed: payment flow now waits for accepted dialog result before finalizing and showing receipt.
-
-- Old: Manager Dashboard displayed static startup values and did not refresh after new sales.
-  New: Manager Dashboard reloads through the global refresh flow.
-  Changed: added dashboard reload behavior and connected it to app-wide refresh.
-
-- Old: dashboards could miscount "today" because created_at is stored in UTC while the UI is read in local time.
-  New: Admin, Manager, and Cashier dashboards use consistent local-day calculations.
-  Changed: date filters now use date/datetime(created_at, 'localtime') to avoid midnight boundary drift.
-
-- Old: Product Management used split-screen form + table.
-  New: main page is list-focused and Add/Edit use modal dialogs.
-  Changed: removed the left Product Details panel and added reusable ProductDialog.
-
-- Old: update/delete depended on shared form state and current selection.
-  New: each table row has its own Edit/Delete actions.
-  Changed: row action buttons were added; modal edit pre-fills old data; table reloads after save/delete.
+2. Recently Completed / Current Changes
+- Moved the project from local-only POS toward Supabase-first operation.
+- Added `cloud/` helpers:
+  + `cloud/supabase_client.py` loads `.env` and creates Supabase clients.
+  + `cloud/auth.py` handles login, register store owner, profile fetch, session restore, admin edge functions.
+  + `cloud/products.py` handles product CRUD, product barcode sync, Storage upload/download, inventory adjustments.
+  + `cloud/inventory.py` handles `checkout_sale`, recent sales, sale items/payments, and registers.
+- Added store-aware local schema fields such as `store_id`, `cloud_id`, `sync_status`, `sync_error`, `last_synced_at`, and `deleted_at`.
+- Added cloud profile caching into local users table.
+- Added Supabase session tokens to the remembered session flow.
+- Added store registration UI for first owner account.
+- Product Management now uses cloud-required save/delete paths for cloud stores.
+- Product table shows sync state and supports retry when sync is pending or failed.
+- Product image flow uploads local images to Supabase Storage and caches downloaded images locally.
+- Checkout now prefers Supabase `checkout_sale` RPC so sale, payments, and stock update together.
+- Offline checkout is limited to Admin users and saved locally as `pending_offline` for later sync.
+- Added pending product and sale retry helpers.
+- Added background sync timer and realtime worker.
+- Added network status notifications.
+- Added light/dark theme mode helpers and runtime toggle.
+- Updated build flow for PyInstaller + Inno Setup packaging.
 
 3. Main Files
-- main.py
-  Main entry point; initializes auth DB, restores session when available, launches PosMainWindow.
-- pos_terminal.py
+- `main.py`
+  Entry point; creates QApplication, initializes auth DB, restores persisted user, opens main window.
+- `app_paths.py`
+  Resolves project/external roots, `.env` candidates, user data dir, DB path, and cache dirs.
+- `pos_terminal.py`
   Compatibility wrapper for the legacy command.
-- login/login_window.py
-  Login, auth helpers, session persistence, cash-shift helpers.
-- database/db.py
-  Shared database helpers for products, barcodes, sales, stock availability, sale validation, and inventory-model migration.
-- pos_terminal/pos_window.py
-  Main window, sidebar, cart, payment, receipt preview, reset toast, logout.
-- product_management/product_management_window.py
-  Product list page plus ProductDialog for Add/Edit.
-- admin/*
+- `login/login_window.py`
+  Supabase login/register, local auth cache, session persistence, users/registers/shifts/settings/audit helpers.
+- `database/db.py`
+  SQLite schema, product/sale queries, inventory validation, local cache, cloud sync, offline pending sale retry.
+- `cloud/*`
+  Supabase client/auth/product/inventory integration.
+- `pos_terminal/pos_window.py`
+  Main shell, sidebar, POS terminal, cart, checkout, receipt preview, background sync, realtime sync, theme toggle, logout.
+- `pos_terminal/realtime_worker.py`
+  Supabase realtime listener that queues local sync after cloud changes.
+- `product_management/product_management_window.py`
+  Product list, ProductDialog add/edit, barcode validation, image selection, label printing, sync status/retry.
+- `product_management/label_printing.py`
+  Product label print/preview helpers.
+- `admin/*`
   Dashboard, users, registers, reports, audit logs, settings.
-- ui/icon_manager.py
-  Centralized icon system.
+- `ui/theme.py`
+  Shared light/dark styles and combo popup fixes.
+- `ui/loading.py`
+  Blocking/background task runners and timeout overlays.
+- `ui/notifications.py`
+  Friendly errors, toast notifications, network status provider.
+- `build_exe.ps1`
+  PyInstaller build script.
+- `build_installer.ps1`
+  Inno Setup staging/build script.
+- `installer/RetailPOS.iss`
+  Inno Setup definition.
 
-4. Global Refresh Flow
-- PosMainWindow exposes app_data_changed = pyqtSignal().
-- Child pages emit data_changed after database writes.
-- Flow:
-  page.data_changed -> notify_app_data_changed() -> app_data_changed.emit()
-- Reload discovery order:
-  + reload_data
-  + load_dashboard_data
-  + load_products
-  + load_users
-  + load_registers
-  + load_settings
-  + load_report
-  + load_logs
-- Shift+F5 now reloads data and shows visible reset feedback.
+4. Runtime Data Model
+- Supabase is the main backend for production/cloud stores.
+- SQLite is local runtime cache/offline support and must not be packaged.
+- Default DB path:
+  + `%LOCALAPPDATA%\RetailPOS\pos.db`
+- Optional dev override:
+  + `POS_DB_PATH=...`
+- Product images:
+  + source: Supabase Storage bucket `product-images`
+  + local cache: `%LOCALAPPDATA%\RetailPOS\cache`
+- `.env` lookup:
+  + folder beside installed exe
+  + project root during development
 
-5. Database
-- Main tables:
+5. Database And Sync
+- Important local tables include:
+  + stores
+  + roles
+  + users
+  + registers
+  + cash_shifts
+  + cash_movements
+  + audit_logs
+  + settings
   + products
   + product_barcodes
   + sales
   + sale_items
   + sale_payments
   + sync_queue
-- products includes barcode, sku, stock_qty, active, updated_at, image_path.
-- product_barcodes supports multiple barcodes per product and primary barcode state.
-- Added helper logic:
-  + get_available_stock()
-  + is_barcode_available()
-  + was_barcode_sold()
-  + ensure_sale_items_available()
-- stock_qty is now the inventory source of truth.
-- A one-time migration converts legacy data into the new inventory model.
-- Why barcodes are not removed after each sale:
-  + In ordinary retail, a barcode identifies a product type, not one unique physical unit.
-  + Many identical Coca-Cola bottles can share the same barcode.
-  + If one sale deleted that barcode, the next identical bottle could no longer be scanned even while stock still exists.
-  + Remaining quantity belongs in stock_qty.
-  + If the business later needs item-level tracking for phones, tickets, gift cards, IMEI, or serial numbers, add a separate serial_items/inventory_units model instead of overloading product barcodes.
+- Product sync:
+  + local changes use `save_product_cloud_required()` for cloud stores.
+  + pending/failed products can retry.
+  + cloud pull updates local cache and marks missing cloud products inactive.
+- Sale sync:
+  + normal cloud checkout calls Supabase RPC `checkout_sale`.
+  + local sale is stored as `synced` after cloud success.
+  + Admin offline checkout stores sale as `pending_offline`.
+  + retry pushes pending sale to cloud later.
+- Background sync:
+  + retries pending products/sales
+  + pulls products
+  + pulls recent sales
+  + refreshes store users/registers
+- Realtime sync:
+  + realtime events mark product/sale data dirty
+  + main window queues a targeted sync
 
 6. POS Terminal
 - Layout:
@@ -122,100 +128,129 @@ Last Updated: 2026-05-16
   + center product grid
   + right cart/totals/actions
 - Product grid:
-  + barcode/name search
-  + product cards with image, name, barcode, price
+  + search/scan barcode/name
+  + product image/name/barcode/price cards
 - Cart:
-  + Barcode, Name, Qty, Price, Total, Remove
-  + validates availability before payment
-  + repeated scans of the same barcode increase quantity
-- Actions:
+  + merges repeated scans by product
+  + validates stock before checkout
+  + supports quantity updates and row removal
+- Checkout:
   + Pay
   + Split Payment
   + Cancel
-- Sidebar now includes Logout.
+  + Receipt preview only after accepted payment
+- Offline behavior:
+  + network issues show friendly notifications
+  + Admin can allow offline checkout; other roles must sync with cloud
 
-7. Payment and Receipt
-- Pay and Split Payment both validate stock before sale creation.
-- Receipt preview is shown only after a successful accepted payment dialog.
-- Receipt includes method, items, total, tendered, and change.
-- Pre-payment receipt preview flow has been removed.
-
-8. Dashboards
-- Cashier Dashboard:
-  + reloadable
-  + Today's Sales, Revenue, and Items Sold use local-day logic
-- Manager Dashboard:
-  + reloadable
-  + Revenue, Transactions, and Avg. Sale use local-day logic
-- Admin Dashboard:
-  + keeps load_dashboard_data() and date filters
-  + summary, payment breakdown, and top products now use local time consistently
-
-9. Product Management
-- Main page now contains only:
-  + Search
+7. Product Management
+- Main page:
+  + search
   + Add Product
-  + product table
-  + row-level Edit/Delete actions
-- Add Product:
-  + opens modal ProductDialog
-  + save closes modal and reloads table
-- Edit Product:
-  + opens ProductDialog with prefilled data
-  + save closes modal and reloads table
-- Modal still supports:
+  + table/list
+  + row actions
+  + sync status/retry
+- ProductDialog:
+  + add/edit product
   + image selection
   + multiple barcodes
   + primary/linked barcode display
   + stock quantity
-  + duplicate-barcode validation
+  + duplicate barcode validation
+- Product image:
+  + local file chosen in UI
+  + uploaded to Supabase Storage when saved
+  + downloaded/cached when pulled from cloud
+- Label printing:
+  + print preview using Qt print support
 
-10. Login and Session
-- “Keep me logged in” now persists the user session.
-- Restarting the app can restore the last user automatically.
-- Logout clears persisted session and returns to login.
+8. Admin And Settings
+- User Management:
+  + pulls store users from Supabase
+  + admin create/update uses edge functions
+  + soft delete/deactivate supported
+- Register Management:
+  + local register cache
+  + pull registers from cloud
+- Reports/Dashboards:
+  + local-day calculations to avoid UTC boundary drift
+  + sales/revenue/items summaries
+- Settings:
+  + store settings
+  + currency
+  + QR/payment display assets
 
-11. How To Run
+9. Theme And UI
+- Runtime theme mode:
+  + light
+  + dark
+- `ui/theme.py` builds mode-aware styles.
+- Main window exposes a theme toggle button.
+- Product Management and admin pages read current theme.
+- Combo popup black-corner fix is centralized.
+- Shared icon system uses `qtawesome`.
+
+10. Build And Installer
 - Setup:
-  .\setup.ps1
-- Run app:
-  .\.venv\Scripts\python.exe main.py
-- Legacy command:
-  .\.venv\Scripts\python.exe pos_terminal.py
+  + `.\setup.ps1`
+- Run source:
+  + `.\.venv\Scripts\python.exe main.py`
+- Build EXE folder:
+  + `.\build_exe.ps1`
+- Build one-file EXE:
+  + `.\build_exe.ps1 -OneFile`
+- Build installer:
+  + `.\build_installer.ps1`
+- Installer output:
+  + `installer\Output\RetailPOSSetup.exe`
+- Installer destination:
+  + `%LOCALAPPDATA%\Programs\RetailPOS`
+- Build script bundles only required UI assets, not `assets\products`.
+- Installer includes current `.env`; use only `SUPABASE_ANON_KEY`, never service-role keys.
 
-12. Verification Completed
-- Compile:
-  + python -m compileall main.py login database pos_terminal product_management admin ui
-- Temporary database checks:
-  + sold barcode removal
-  + session persistence
-  + out-of-stock validation
-- Offscreen UI smoke checks:
-  + reset toast
-  + no receipt on rejected payment dialog
-  + ProductDialog add/edit flow
-  + row-level Product Management actions
-  + Manager Dashboard refresh after a new sale
-  + Admin Dashboard local-day behavior around midnight UTC
+11. Verification Completed / Expected
+- `setup.ps1` installs dependencies and compile-checks:
+  + `app_paths.py`
+  + `main.py`
+  + `cloud`
+  + `login`
+  + `pos_terminal`
+  + `product_management`
+  + `admin`
+  + `database`
+  + `ui`
+- `build_exe.ps1` compile-checks the same runtime code before PyInstaller.
+- Recommended before release:
+  + run source app login
+  + test product add/edit/delete
+  + test product sync retry
+  + test checkout through cloud
+  + test Admin offline pending sale
+  + run installer on a clean Windows user profile
 
-13. Recommended Next Work
-- Expand Inventory UI later if you need stock adjustments, stock movement history, or multi-branch inventory.
+12. Recommended Next Work
+- Add explicit local migration version table.
 - Add Sales History page.
+- Add refund/return workflow.
 - Add receipt number / sale_id to receipt.
 - Add TXT/PDF receipt export.
-- Add refund/return workflow.
+- Add inventory adjustment UI and movement history.
+- Add conflict resolution UI for pending offline sales.
 - Add product-choice dialog when search returns multiple matches.
-- Add category management if categories need their own admin flow.
+- Add category management if categories become first-class data.
 - Add item-level discount.
 - Add tax/VAT/service charge.
-- Add explicit migration versioning.
+- Add automated smoke tests for login/product/checkout.
 
-14. Developer Notes
-- Keep raw SQL in database/db.py where possible.
-- Any page that writes DB should emit data_changed after changes.
-- Any page that needs refresh support should expose reload_data().
-- POS changes: pos_terminal/pos_window.py.
-- Product Management changes: product_management/product_management_window.py.
-- Login/session changes: login/login_window.py.
-- DB/schema/helper changes: database/db.py.
-- pos.db is runtime data and may differ between machines.
+13. Developer Notes
+- Prefer DB/cloud helpers over raw SQL in UI.
+- Any page that writes data should emit `data_changed` or `sync_requested` when needed.
+- Any page that needs refresh support should expose `reload_data()`.
+- POS changes: `pos_terminal/pos_window.py`.
+- Product Management changes: `product_management/product_management_window.py`.
+- Login/session/store auth changes: `login/login_window.py`.
+- Local DB/schema/sync changes: `database/db.py`.
+- Supabase API changes: `cloud/` and `supabase/`.
+- Build/runtime path changes: `app_paths.py`, `build_exe.ps1`, `build_installer.ps1`, `installer/RetailPOS.iss`.
+- Keep `Progress/`, `BUILD_EXE.md`, `README_SETUP.md`, `requirements.txt`, `setup.ps1`, and `TODO.md` in sync after major changes.
+#Created by Truong Quang Nghia, David Nghia SWUST

@@ -55,7 +55,7 @@ def get_sales_summary(start_date: str, end_date: str) -> dict:
             (store_id, start_date, end_date, store_id),
         )
         items_row = cursor.fetchone()
-        
+        #Created by Truong Quang Nghia, David Nghia SWUST
         # Get payment method breakdown from payment rows so split payments are counted correctly.
         cursor = connection.execute(
             """

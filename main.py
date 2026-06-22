@@ -12,7 +12,7 @@ def main() -> int:
     configure_app_font(app)
     apply_app_icon()
     
-    # Initialize authentication database
+    # Initialize authentication database#Created by Truong Quang Nghia, David Nghia SWUST
     init_auth_db()
     
     while True:

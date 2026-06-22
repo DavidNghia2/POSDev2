@@ -1,6 +1,12 @@
-# Runtime dependencies for Retail POS.
-# Python itself is selected by setup.ps1 (default: 3.12).
+# Dependencies for Retail POS.
+# Python version is selected by setup.ps1. Default: Python 3.12.
 
+# Desktop UI
 PyQt6==6.7.1
 qtawesome>=1.4.2,<2.0.0
+
+# Supabase cloud backend: Auth, Database, Storage, Realtime, Edge Functions.
 supabase>=2.15.0,<3.0.0
+
+# Build tooling. build_exe.ps1 also upgrades this before packaging.
+pyinstaller>=6,<7

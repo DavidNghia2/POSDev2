@@ -513,3 +513,4 @@ class RegisterManagementWindow(QWidget):
 def create_register_management(current_user: dict) -> RegisterManagementWindow:
     window = RegisterManagementWindow(current_user)
     return window
+#Created by Truong Quang Nghia, David Nghia SWUST
